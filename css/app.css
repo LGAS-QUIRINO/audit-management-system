@@ -56,12 +56,70 @@ body{font-family:"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); backgroun
 footer{background:var(--navy); color:#dce5f7; font-size:11.5px; display:flex; justify-content:space-between; gap:12px; padding:6px 24px 18px; flex-wrap:wrap}
 footer .motto{font-family:Georgia,serif; font-style:italic; letter-spacing:2px}
 
-/* ---------- Temporary signed-in screen ---------- */
-.home-wrap{flex:1; display:flex; align-items:center; justify-content:center; padding:56px 16px 32px}
-.home-card{max-width:480px; width:100%; background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px; text-align:center;
-  box-shadow:0 12px 40px rgba(11,42,107,.10)}
-.home-card h2{margin:0 0 6px; color:var(--navy)}
-.home-card p{color:var(--muted); font-size:14px; line-height:1.5}
+/* ---------- Dashboard ---------- */
+.dash{flex:1; width:100%; max-width:1320px; margin:0 auto; padding:18px 24px 28px}
+.d-head{display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap}
+.d-brand{display:flex; align-items:center; gap:14px}
+.d-brand img{width:64px; height:64px; border-radius:50%}
+.d-brand .a{font-family:Georgia,"Times New Roman",serif; font-weight:700; color:var(--navy); font-size:22px; letter-spacing:.3px; margin:0}
+.d-brand .r{font-size:10.5px; letter-spacing:3px; color:var(--muted); margin:3px 0 0}
+.d-user{display:flex; align-items:center; gap:6px}
+.who{display:flex; align-items:center; gap:10px; padding:6px 10px}
+.avatar{width:38px; height:38px; border-radius:50%; background:#e3ebfa; color:var(--navy); display:grid; place-items:center; font-weight:700; font-size:14px}
+.who .n{font-weight:700; font-size:14px; color:var(--navy); margin:0}
+.who .o{font-size:12px; color:var(--muted); margin:1px 0 0}
+.icon-btn{width:40px; height:40px; border-radius:10px; border:1px solid transparent; background:transparent; display:grid; place-items:center; cursor:pointer; color:var(--navy); position:relative}
+.icon-btn:hover{background:#fff; border-color:var(--line)}
+.icon-btn .dot{position:absolute; top:7px; right:8px; width:9px; height:9px; border-radius:50%; background:var(--red); border:2px solid var(--bg)}
+.sep{width:1px; height:30px; background:var(--line)}
+.d-title{text-align:center; margin:18px 0 22px}
+.d-title h1{margin:0; font-size:38px; font-weight:800; color:var(--navy); letter-spacing:.5px}
+.tri.wide{width:240px}
+.d-title .office{font-size:18px; letter-spacing:7px; margin:4px 0 10px}
+.d-title .motto{font-size:11px; letter-spacing:4px; color:var(--muted); margin:0}
+.cards{max-width:1060px; margin:0 auto; display:flex; flex-wrap:wrap; justify-content:center; gap:16px}
+.card{flex:0 1 calc((100% - 48px)/4); background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; display:flex; flex-direction:column; gap:10px;
+  border-bottom:4px solid var(--k); box-shadow:0 6px 20px rgba(11,42,107,.06); text-decoration:none; color:inherit; min-height:200px; transition:transform .12s, box-shadow .12s}
+.card:hover{transform:translateY(-2px); box-shadow:0 10px 26px rgba(11,42,107,.12)}
+.card .ic{width:52px; height:52px; border-radius:50%; background:var(--k); display:grid; place-items:center; color:#fff; flex:none}
+.card h3{margin:2px 0 0; font-size:15px; font-weight:800; color:var(--navy); letter-spacing:.2px; line-height:1.25; text-transform:uppercase}
+.card p{margin:0; font-size:13px; color:var(--muted); line-height:1.45; flex:1}
+.card .go{align-self:flex-end; width:34px; height:34px; border-radius:50%; background:#eef2fa; display:grid; place-items:center; color:var(--navy)}
+.card:hover .go{background:var(--k); color:#fff}
+
+/* Urgent Reports pop-out (lower-right corner) */
+.u-pop{position:fixed; bottom:24px; right:24px; z-index:20; width:380px; max-width:calc(100% - 32px); animation:u-slide .25s ease-out}
+.u-pop[hidden]{display:none}
+@keyframes u-slide{from{opacity:0; transform:translateY(12px)} to{opacity:1; transform:none}}
+.urgent{background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:0 20px 60px rgba(11,42,107,.30); padding:18px}
+.u-h{display:flex; align-items:center; gap:10px; margin:0}
+.u-h b{font-size:15px; color:var(--navy); letter-spacing:.3px}
+.u-count{min-width:20px; height:20px; border-radius:10px; background:#e8ecf4; color:var(--muted); font-size:11px; font-weight:700; display:grid; place-items:center; padding:0 6px}
+.u-x{margin-left:auto; width:32px; height:32px; border-radius:8px; border:0; background:transparent; font-size:20px; color:var(--muted); cursor:pointer}
+.u-x:hover{background:#eef2fa}
+.u-sub{font-size:12.5px; color:var(--muted); margin:4px 0 14px}
+.u-empty{border:1px dashed #cdd6e8; border-radius:12px; padding:26px 16px; text-align:center; color:var(--muted); font-size:13px}
+.u-ok{width:42px; height:42px; border-radius:50%; background:var(--ok-bg); color:var(--ok); display:grid; place-items:center; margin:0 auto 10px}
+.u-item{border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; flex-direction:column; gap:2px; font-size:13px}
+.u-item span{color:var(--muted); font-size:12px}
+.u-all{display:block; text-align:center; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); font-size:12.5px; font-weight:700; color:var(--blue); letter-spacing:.4px; text-decoration:none}
+.u-btns{display:flex; justify-content:flex-end; margin-top:14px}
+
+/* small message at the bottom of the screen */
+.toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:30; background:var(--ink); color:#fff; font-size:13px; padding:10px 16px; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.2); max-width:calc(100% - 32px)}
+.toast[hidden]{display:none}
+
+@media (max-width:1180px){.card{flex-basis:calc((100% - 32px)/3)}}
+@media (max-width:980px){.card{flex-basis:calc((100% - 16px)/2)}}
+@media (max-width:560px){
+  .dash{padding:14px 16px 24px}
+  .card{flex-basis:100%; min-height:0}
+  .d-head{justify-content:center}
+  .d-brand img{width:48px; height:48px}.d-brand .a{font-size:17px}.d-brand .r{font-size:9px; letter-spacing:2px}
+  .who .o{display:none}
+  .d-title h1{font-size:26px}.tri.wide{width:170px}.d-title .office{font-size:15px; letter-spacing:5px}.d-title .motto{font-size:9.5px; letter-spacing:2px}
+  .u-pop{bottom:16px; right:16px; left:16px; width:auto; max-width:none}
+}
 
 @media (max-width:480px){
   .login-card{padding:28px 20px 22px}
