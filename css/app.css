@@ -1,0 +1,70 @@
+/* AMS – shared look for every screen and module */
+:root{
+  --navy:#0b2a6b; --navy-2:#13398a; --blue:#1f5fd1; --red:#d62839; --gold:#f2b705;
+  --ink:#1b2440; --muted:#5b6785; --line:#dfe5f1; --card:#ffffff; --bg:#f3f6fb;
+  --ok:#2e7d32; --ok-bg:#e8f5e9; --warn:#7a5a00; --warn-bg:#fff4d6; --bad:#b3261e; --bad-bg:#fdecea;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{font-family:"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); background:var(--bg); overflow-x:hidden}
+.bg{position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:radial-gradient(900px 500px at 85% -10%,#e3ebfa 0%,transparent 60%),
+             radial-gradient(700px 420px at -10% 110%,#e6edf9 0%,transparent 60%),var(--bg)}
+#app{position:relative; z-index:1; min-height:100vh; display:flex; flex-direction:column}
+
+/* tri-color line (blue, gold, red) */
+.tri{height:4px; width:150px; margin:10px auto; border-radius:2px;
+  background:linear-gradient(90deg,var(--blue) 0 33.3%,var(--gold) 33.3% 66.6%,var(--red) 66.6% 100%)}
+
+/* pills */
+.pill{display:inline-flex; align-items:center; gap:6px; font-size:11.5px; border-radius:20px; padding:3px 10px; white-space:nowrap}
+.pill.ok{color:var(--ok); background:var(--ok-bg)}
+.pill.ok i{width:7px; height:7px; border-radius:50%; background:var(--ok); display:inline-block}
+.pill.warn{color:var(--warn); background:var(--warn-bg); border:1px solid #f1d78b}
+
+/* messages */
+.msg{border-radius:10px; padding:10px 12px; font-size:13px; text-align:left; margin:0 0 14px}
+.msg.bad{background:var(--bad-bg); color:var(--bad)}
+
+/* buttons */
+.btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 16px; border-radius:10px;
+  border:1px solid #c9d3e6; background:#fff; color:var(--ink); font:inherit; font-size:14px; font-weight:600; cursor:pointer}
+.btn:hover{border-color:var(--blue); background:#f5f8fe}
+.btn.primary{background:var(--navy); border-color:var(--navy); color:#fff}
+.btn.primary:hover{background:var(--navy-2)}
+
+/* ---------- Login ---------- */
+.login-wrap{flex:1; display:flex; align-items:center; justify-content:center; padding:56px 16px 32px}
+.login-card{width:100%; max-width:420px; background:var(--card); border:1px solid var(--line); border-radius:16px;
+  box-shadow:0 12px 40px rgba(11,42,107,.10); padding:36px 32px 28px; text-align:center}
+.login-card .seal{width:96px; height:96px; border-radius:50%; display:block; margin:0 auto 14px}
+.login-card .agency{font-family:Georgia,"Times New Roman",serif; font-weight:700; color:var(--navy); font-size:15px; letter-spacing:.5px; margin:0}
+.login-card .rep{font-size:10.5px; letter-spacing:3px; color:var(--muted); margin:4px 0 22px}
+.login-card h1{margin:0; font-size:24px; font-weight:800; color:var(--navy); letter-spacing:.3px}
+.login-card .office{font-size:14px; letter-spacing:5px; margin:0 0 26px}
+.gbtn{width:100%; display:flex; align-items:center; justify-content:center; gap:10px; padding:12px 16px; border-radius:10px;
+  border:1px solid #c9d3e6; background:#fff; font:inherit; font-size:15px; font-weight:600; color:var(--ink); cursor:pointer}
+.gbtn:hover{background:#f5f8fe; border-color:var(--blue)}
+#gsi-btn{display:flex; justify-content:center; min-height:44px}
+.login-card .note{font-size:12.5px; color:var(--muted); margin:14px 0 0; line-height:1.5}
+.login-card .divider{height:1px; background:var(--line); margin:24px 0 14px}
+.login-card .help{font-size:12px; color:var(--muted); margin:0 0 12px}
+.demo-tag{margin:0 0 16px}
+
+/* ---------- Bottom band (wave + footer) ---------- */
+.bottom .wave{display:block; width:100%; height:60px}
+footer{background:var(--navy); color:#dce5f7; font-size:11.5px; display:flex; justify-content:space-between; gap:12px; padding:6px 24px 18px; flex-wrap:wrap}
+footer .motto{font-family:Georgia,serif; font-style:italic; letter-spacing:2px}
+
+/* ---------- Temporary signed-in screen ---------- */
+.home-wrap{flex:1; display:flex; align-items:center; justify-content:center; padding:56px 16px 32px}
+.home-card{max-width:480px; width:100%; background:#fff; border:1px solid var(--line); border-radius:16px; padding:28px; text-align:center;
+  box-shadow:0 12px 40px rgba(11,42,107,.10)}
+.home-card h2{margin:0 0 6px; color:var(--navy)}
+.home-card p{color:var(--muted); font-size:14px; line-height:1.5}
+
+@media (max-width:480px){
+  .login-card{padding:28px 20px 22px}
+  .login-card h1{font-size:21px}
+  footer{justify-content:center; text-align:center}
+}
