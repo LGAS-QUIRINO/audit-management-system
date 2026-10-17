@@ -3,6 +3,7 @@
 export const CONFIG = {
   API_URL: '',
   CLIENT_ID: '',
+  SYNC_EVERY_MS: 60000,
   // Label shown on the login card, e.g. 'Practice copy'. Leave empty for none.
   LABEL: ''
 };

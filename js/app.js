@@ -2,6 +2,7 @@
 import { DEMO } from './config.js';
 import { auth } from './auth.js';
 import { store, loadRefs, onChange } from './store.js';
+import { startSync, syncNow, syncState } from './sync.js';
 import { $, toast, bottomBand } from './ui.js';
 import { loginHtml } from './views/login.js';
 import { dashboardHtml } from './views/dashboard.js';
@@ -9,6 +10,18 @@ import { MODULES } from './modules.js';
 import { adminBar, notAdmin, roleLine, usersHtml, wireUsers, teamsHtml, wireTeams, lgusHtml, wireLgus } from './views/admin.js';
 
 const app = document.getElementById('app');
+
+// Small status shown on the Admin screens: whether changes have reached the AMS database.
+export function syncPill(st = syncState) {
+  if (DEMO) return '<span id="sync" class="sync demo">Demo Mode · saved in this browser only</span>';
+  const n = st.pending || 0;
+  const text = st.status === 'offline' ? (n ? `Offline · ${n} change${n > 1 ? 's' : ''} saved on this device` : 'Offline')
+    : st.status === 'syncing' || st.status === 'retry' ? 'Saving to database…'
+    : st.status === 'signin' ? 'Sign in again to send changes'
+    : n ? `${n} change${n > 1 ? 's' : ''} waiting to send` : 'All changes saved';
+  const kind = st.status === 'offline' || st.status === 'signin' || st.status === 'error' ? 'warn' : n || st.status === 'syncing' ? '' : 'ok';
+  return `<span id="sync" class="sync ${kind}" title="${st.lastSync ? 'Last sync ' + new Date(st.lastSync).toLocaleString() : ''}">● ${text}</span>`;
+}
 let signedIn = false;
 let popPending = false;   // the Urgent Reports pop-out appears once each time the app is opened or someone signs in
 
@@ -20,13 +33,24 @@ async function showLogin(error = '') {
     return;
   }
   try { await auth.renderButton($('#gsi-btn')); }
-  catch (e) { app.innerHTML = loginHtml(e.message); }
+  catch (e) { app.innerHTML = loginHtml(error || e.message); }
 }
 
 async function enter() {
+  if (!DEMO) {
+    // Connected: on a device's first sign-in, wait for the database before deciding who this is.
+    const have = (await store.list('users')).length > 0;
+    if (!have) app.innerHTML = loginHtml('', 'Connecting to the AMS database…');
+    const problems = have ? (startSync(), []) : await startSync();
+    if (!have && problems.length && !(await store.list('users')).length) {
+      const m = problems[0];
+      if (/not registered|not for this app|not verified/i.test(m)) { await auth.signOut(); return showLogin(m); }
+      return showLogin(m === 'OFFLINE' || /fetch/i.test(m) ? 'No internet. The first sign-in on this device needs internet.' : m);
+    }
+  }
   const refs = await loadRefs(auth.session.email);
   if (!DEMO && (!refs.me || refs.me.data.status === 'disabled')) {
-    await auth.signOut();
+    await auth.signOut(); await store.wipe();
     return showLogin('This Gmail is not registered in AMS. Ask the Admin to add it.');
   }
   signedIn = true;
@@ -49,7 +73,7 @@ async function render() {
       : key === 'lgus' ? lgusHtml(refs, q)
       : usersHtml(refs);
     const y = window.scrollY;
-    app.innerHTML = adminBar(key, refs, auth.session) + `<main class="admin">${body}</main>` + bottomBand();
+    app.innerHTML = adminBar(key, refs, auth.session, syncPill()) + `<main class="admin">${body}</main>` + bottomBand();
     if (refs.isAdmin) {
       if (key === 'teams') wireTeams(refs);
       else if (key === 'lgus') wireLgus(refs, q);
@@ -85,6 +109,11 @@ function showDashboard(refs) {
 }
 
 window.addEventListener('hashchange', () => render());
+window.addEventListener('sync-status', (e) => {
+  const el = document.getElementById('sync'); if (el) el.outerHTML = syncPill(e.detail);
+  if (e.detail.status === 'error' && e.detail.message) toast(e.detail.message, 'bad');
+});
+window.addEventListener('access-revoked', async (e) => { await auth.signOut(); await store.wipe(); showLogin(e.detail); });
 onChange(() => render());
 window.addEventListener('signed-in', () => enter());
 

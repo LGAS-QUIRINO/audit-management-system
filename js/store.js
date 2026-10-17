@@ -1,39 +1,48 @@
-// Records kept on this device (users, teams, lgus). Every save also waits in the outbox,
-// ready to be sent to the AMS database once it is connected.
+// Records kept on this device (users, teams, lgus).
+// Connected: every save waits in the outbox and is sent to the AMS database by sync.js.
+// Demo Mode: saves stay in this browser only.
 import { db } from './db.js';
 import { DEMO } from './config.js';
 import { seedData, DEMO_ADMIN } from './seed.js';
 
 const listeners = new Set();
 export const onChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
-const emit = (table) => listeners.forEach((fn) => fn(table));
+export const emitChange = (src) => listeners.forEach((fn) => fn(src));
 
-export const newId = (prefix) => prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+export const newId = (prefix) => prefix + '-' + (crypto.randomUUID ? crypto.randomUUID().slice(0, 13) : Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+
+const put = (table, id, data, by = '') => db.put('records', { table, id, version: 1, updatedAt: new Date().toISOString(), updatedBy: by, deleted: false, data, pending: false });
 
 export const store = {
-  // First run on this device: load the teams and the LGU Master List (and the demo Admin in Demo Mode).
+  // Demo Mode, first run on this device: load the teams, the LGU Master List and the demo Admin.
+  // Connected: everything comes from the AMS database on the first sync.
   async ready() {
-    if (await db.get('meta', 'seeded')) return;
+    if (!DEMO || await db.get('meta', 'seeded')) return;
     const { teams, lgus } = seedData();
-    for (const t of teams) await db.put('records', { table: 'teams', id: t.id, data: t, at: Date.now() });
-    for (const l of lgus) await db.put('records', { table: 'lgus', id: l.id, data: l, at: Date.now() });
-    if (DEMO) await db.put('records', { table: 'users', id: DEMO_ADMIN.id, data: DEMO_ADMIN, at: Date.now() });
+    for (const t of teams) await put('teams', t.id, t, 'setup');
+    for (const l of lgus) await put('lgus', l.id, l, 'setup');
+    await put('users', DEMO_ADMIN.id, DEMO_ADMIN, 'setup');
     await db.put('meta', true, 'seeded');
   },
-  async list(table) { return db.all('records', table); },
+  async list(table) { return (await db.all('records', table)).filter((r) => !r.deleted); },
   async get(table, id) { return db.get('records', [table, id]); },
-  async save(table, id, data, by = '') {
-    const rec = { table, id, data, at: Date.now(), by };
+  async save(table, id, data, by = '', { deleted = false } = {}) {
+    const cur = await db.get('records', [table, id]);
+    const now = new Date().toISOString();
+    if (DEMO) {
+      const rec = { table, id, version: (cur ? cur.version : 0) + 1, updatedAt: now, updatedBy: by, deleted, data, pending: false };
+      await db.put('records', rec); emitChange('local'); return rec;
+    }
+    const queued = await db.get('outbox', [table, id]);
+    const baseVersion = queued ? queued.baseVersion : cur ? cur.version : 0;
+    await db.put('outbox', { table, id, baseVersion, data, deleted, queuedAt: now });
+    const rec = { table, id, version: cur ? cur.version : 0, updatedAt: now, updatedBy: cur ? cur.updatedBy : '', deleted, data, pending: true };
     await db.put('records', rec);
-    await db.put('outbox', rec);
-    emit(table);
+    emitChange('local');
+    window.dispatchEvent(new Event('outbox-changed'));
     return rec;
   },
-  async del(table, id) {
-    await db.del('records', [table, id]);
-    await db.put('outbox', { table, id, data: null, deleted: true, at: Date.now() });
-    emit(table);
-  }
+  async wipe() { await db.clear('records'); await db.clear('outbox'); await db.del('meta', 'lastSync'); }
 };
 
 // Everything the screens need at once, with quick look-ups by ID.

@@ -15,7 +15,7 @@ export function roleLine(refs) {
 }
 
 // Top bar on every Admin screen.
-export function adminBar(active, refs, session) {
+export function adminBar(active, refs, session, syncHtml = '') {
   const name = refs.me ? refs.me.data.name : (session.name || session.email);
   const ini = String(name).split(/\s+/).filter((w) => /^[A-Z]/i.test(w)).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const link = (href, label, key) => `<a href="${href}" class="${active === key ? 'on' : ''}">${label}</a>`;
@@ -23,7 +23,7 @@ export function adminBar(active, refs, session) {
     <img src="img/coa-logo.png" alt="COA seal">
     <div class="t">AUDIT MANAGEMENT SYSTEM<small>COA QUIRINO</small></div>
     <nav>${link('#/', '← Dashboard', '')}${link('#/admin/users', 'Users &amp; Roles', 'users')}${link('#/admin/teams', 'Teams', 'teams')}${link('#/admin/lgus', 'LGU Master List', 'lgus')}</nav>
-    <div class="me"><div class="av">${esc(ini)}</div><span>${esc(name)}<br><small>${esc(roleLine(refs))}</small></span></div>
+    ${syncHtml}<div class="me"><div class="av">${esc(ini)}</div><span>${esc(name)}<br><small>${esc(roleLine(refs))}</small></span></div>
   </div><div class="tri-bar"></div>`;
 }
 
