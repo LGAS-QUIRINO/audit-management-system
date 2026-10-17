@@ -5,6 +5,7 @@ import { MODULES, iconSvg } from '../modules.js';
 const BELL = '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>';
 const OUT = '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>';
 const CHECK = '<path d="M5 12l5 5 9-10"/>';
+const GEAR = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
 
 function initials(name, email) {
   const src = (name || email || '').replace(/@.*/, '').split(/[\s._-]+/).filter(Boolean);
@@ -29,16 +30,17 @@ function urgentHtml(items) {
     </aside></div>`;
 }
 
-export function dashboardHtml(session, roleLine) {
+export function dashboardHtml(session, roleLine, isAdmin = false, displayName = '') {
   const items = urgentItems();
   return `<div class="dash">
     <header class="d-head">
       <div class="d-brand"><img src="img/coa-logo.png" alt="Commission on Audit seal">
         <div><p class="a">COMMISSION ON AUDIT</p><p class="r">REPUBLIC OF THE PHILIPPINES</p></div></div>
       <div class="d-user">
-        <div class="who"><div class="avatar">${esc(initials(session.name, session.email))}</div>
-          <div><p class="n">${esc((session.name || session.email).toUpperCase())}</p><p class="o">${esc(roleLine)}</p></div></div>
+        <div class="who"><div class="avatar">${esc(initials(displayName || session.name, session.email))}</div>
+          <div><p class="n">${esc((displayName || session.name || session.email).toUpperCase())}</p><p class="o">${esc(roleLine)}</p></div></div>
         <span class="sep"></span>
+        ${isAdmin ? `<a class="icon-btn" id="admin" href="#/admin/users" title="Admin" aria-label="Admin">${iconSvg(GEAR, 22)}</a>` : ''}
         <button class="icon-btn" id="bell" title="Urgent reports" aria-label="Urgent reports">${iconSvg(BELL, 22)}${items.length ? '<span class="dot"></span>' : ''}</button>
         <button class="icon-btn" id="signout" title="Sign out" aria-label="Sign out">${iconSvg(OUT, 22)}</button>
       </div>
