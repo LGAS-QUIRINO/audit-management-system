@@ -3,8 +3,8 @@
 One app with modules for the Commission on Audit, COA Quirino.
 
 ## Status
-- Core: **Login**, **Dashboard**, and Admin screens (**Users & Roles**, **Teams**, **LGU Master List**) built (Demo Mode until the AMS database and Google sign-in are set up).
-- Database connection ready (`backend/Code.gs`); see **SETUP.md** to switch it on under the AMS Gmail.
+- Core: **Login**, **Dashboard**, and Admin screens (**Users & Roles**, **Teams**, **LGU Master List**) built.
+- Connected to the AMS Database (Apps Script under the AMS Gmail) with Google sign-in. Setup steps: **SETUP.md**.
 
 ## Modules (built one at a time, each tested separately before it is moved in)
 Records Management · Periodic Reports · Other Reports · Cash Examination Report (CER) ·

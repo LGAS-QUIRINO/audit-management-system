@@ -1,5 +1,5 @@
 // Keeps AMS working offline. Change RELEASE on every update so devices pick up the new files.
-const RELEASE = 'v0.4.0';
+const RELEASE = 'v0.5.0';
 const VERSION = 'ams|' + self.registration.scope + '|' + RELEASE;
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/app.css',
   'img/coa-logo.png', 'img/icon-192.png', 'img/icon-512.png',
