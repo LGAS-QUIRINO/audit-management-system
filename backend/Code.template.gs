@@ -97,10 +97,26 @@ function sheet_(table) {
 function readAll_(table) {
   const sh = sheet_(table); const n = sh.getLastRow();
   if (n < 2) return [];
-  return sh.getRange(2, 1, n - 1, HEAD.length).getValues().filter(function (r) { return r[0]; }).map(rec_);
+  return sh.getRange(2, 1, n - 1, Math.max(HEAD.length, sh.getLastColumn())).getValues().filter(function (r) { return r[0]; }).map(rec_);
+}
+// A Google Sheets cell holds at most 50,000 characters. A large record (e.g. a BRS with 76 bank accounts) is split into
+// pieces of up to 45,000 characters in the cells to the right of "data"; the extra pieces start with "~" so that Sheets
+// never turns a piece into a number or a date.
+const PIECE = 45000;
+function rowOf_(id, version, at, by, deleted, data) {
+  const s = JSON.stringify(data), row = [id, version, at, by, deleted];
+  for (let i = 0; i === 0 || i * PIECE < s.length; i++) row.push((i ? '~' : '') + s.slice(i * PIECE, (i + 1) * PIECE));
+  return row;
+}
+function writeRow_(sh, rowNo, values) {
+  const w = Math.max(values.length, sh.getLastColumn(), HEAD.length);
+  if (sh.getMaxColumns() < w) sh.insertColumnsAfter(sh.getMaxColumns(), w - sh.getMaxColumns());
+  const full = values.concat(new Array(w - values.length).fill(''));
+  if (rowNo) sh.getRange(rowNo, 1, 1, w).setValues([full]); else sh.appendRow(full);
 }
 function rec_(r) {
-  let data = null; try { data = JSON.parse(r[5]); } catch (e) { data = null; }
+  const text = r.slice(5).filter(function (x) { return x !== '' && x !== null && x !== undefined; }).map(function (x, i) { return i ? String(x).replace(/^~/, '') : String(x); }).join('');
+  let data = null; try { data = JSON.parse(text); } catch (e) { data = null; }
   const at = r[2] instanceof Date ? r[2].toISOString() : String(r[2]);
   return { id: String(r[0]), version: Number(r[1]) || 0, updatedAt: at, updatedBy: String(r[3]), deleted: r[4] === true || r[4] === 'TRUE', data: data };
 }
@@ -131,12 +147,12 @@ function push_(changes, email, roles) {
         if (ADMIN_TABLES[c.table] && !isAdmin) throw new Error('Only the Admin can change ' + c.table + '.');
         if (TABLE_ROLES[c.table] && !has(TABLE_ROLES[c.table])) throw new Error('Your role cannot change this (' + c.table + ').');
         const row = findRow_(c.table, c.id), sh = sheet_(c.table);
-        const cur = row ? rec_(sh.getRange(row, 1, 1, HEAD.length).getValues()[0]) : null;
+        const cur = row ? rec_(sh.getRange(row, 1, 1, Math.max(HEAD.length, sh.getLastColumn())).getValues()[0]) : null;
         if ((cur ? cur.version : 0) !== Number(c.baseVersion || 0)) { res.status = 'conflict'; res.record = cur; return res; }
         if (c.table === 'users' && !c.deleted) checkUser_(c, email);
         if (c.table === 'rms_items') checkItem_(c, cur, has(DECIDERS), isAdmin, has(CORRECTORS));
-        const next = [c.id, (cur ? cur.version : 0) + 1, new Date().toISOString(), email, !!c.deleted, JSON.stringify(c.data)];
-        if (row) sh.getRange(row, 1, 1, HEAD.length).setValues([next]); else sh.appendRow(next);
+        const next = rowOf_(c.id, (cur ? cur.version : 0) + 1, new Date().toISOString(), email, !!c.deleted, c.data);
+        writeRow_(sh, row, next);
         log.appendRow([next[2], email, row ? (c.deleted ? 'deleted' : 'changed') : 'added', c.table, c.id]);
         res.status = 'ok'; res.record = rec_(next);
       } catch (err) { res.status = 'error'; res.error = String(err.message || err); }
@@ -189,7 +205,7 @@ function markActive_(me, email) {
   try {
     const row = findRow_('users', me.id); if (!row) return;
     const data = Object.assign({}, me.data, { status: 'active' });
-    sheet_('users').getRange(row, 1, 1, HEAD.length).setValues([[me.id, me.version + 1, new Date().toISOString(), email, false, JSON.stringify(data)]]);
+    writeRow_(sheet_('users'), row, rowOf_(me.id, me.version + 1, new Date().toISOString(), email, false, data));
   } finally { lock.releaseLock(); }
 }
 
