@@ -52,7 +52,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-10-19 · large records split over cells';
+const SCRIPT_VERSION = '2026-10-19b · large records split over cells · earlier batches';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -174,7 +174,9 @@ function checkItem_(c, cur, decider, isAdmin, corrector) {
   if (old && !corrector) {
     const same = function (k) { return JSON.stringify(d[k] === undefined ? null : d[k]) === JSON.stringify(old[k] === undefined ? null : old[k]); };
     const unticked = (old.checklist || []).some(function (x, k) { return x.ok && !((d.checklist || [])[k] || {}).ok; });
-    if (!same('corrections') || !same('receivedAt') || !same('period') || !same('submittedBy') || !same('submittedDesignation') || !same('subject') || unticked)
+    // A batch dated earlier than the first submission (back-encoding) may move the date received earlier, never later.
+    const recOk = same('receivedAt') || (d.receivedAt && old.receivedAt && String(d.receivedAt) < String(old.receivedAt));
+    if (!same('corrections') || !recOk || !same('period') || !same('submittedBy') || !same('submittedDesignation') || !same('subject') || unticked)
       throw new Error('Only the Admin or the SA can correct a received record.');
   }
   const decided = function (x) { return x && x.decision ? JSON.stringify(x.decision) : ''; };
