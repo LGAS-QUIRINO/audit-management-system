@@ -51,7 +51,9 @@ function setup() {
 }
 
 /* ---------- web app ---------- */
-function doGet() { return json_({ ok: true, app: 'AMS', time: new Date().toISOString() }); }
+// Shown when the Web app URL is opened in a browser, to check which version is deployed.
+const SCRIPT_VERSION = '2026-10-19 · large records split over cells';
+function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
   try {
