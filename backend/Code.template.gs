@@ -20,6 +20,7 @@ const TABLE_ROLES = {
   rms_items: ['admin', 'sa', 'atl', 'member', 'osa', 'staff']     // Receiving: everyone with a role
 };
 const DECIDERS = ['admin', 'sa', 'atl', 'member'];                // may accept or reject (not JO or SA Staff)
+const CORRECTORS = ['admin', 'sa'];                               // may correct a received record
 const HEAD = ['id', 'version', 'updatedAt', 'updatedBy', 'deleted', 'data'];
 const SEED = __SEED__;
 
@@ -133,7 +134,7 @@ function push_(changes, email, roles) {
         const cur = row ? rec_(sh.getRange(row, 1, 1, HEAD.length).getValues()[0]) : null;
         if ((cur ? cur.version : 0) !== Number(c.baseVersion || 0)) { res.status = 'conflict'; res.record = cur; return res; }
         if (c.table === 'users' && !c.deleted) checkUser_(c, email);
-        if (c.table === 'rms_items') checkItem_(c, cur, has(DECIDERS), isAdmin);
+        if (c.table === 'rms_items') checkItem_(c, cur, has(DECIDERS), isAdmin, has(CORRECTORS));
         const next = [c.id, (cur ? cur.version : 0) + 1, new Date().toISOString(), email, !!c.deleted, JSON.stringify(c.data)];
         if (row) sh.getRange(row, 1, 1, HEAD.length).setValues([next]); else sh.appendRow(next);
         log.appendRow([next[2], email, row ? (c.deleted ? 'deleted' : 'changed') : 'added', c.table, c.id]);
@@ -148,9 +149,16 @@ function push_(changes, email, roles) {
 // Tracking numbers are given here, so two people receiving at the same time never get the same number.
 // One running series per office per year: MAD-ABB-RCI-2026-0012 (reports), MAD-ABB-2026-0013 (communications), OUT-2026-0004.
 // Once given, a record's number never changes. Only auditors may accept or reject.
-function checkItem_(c, cur, decider, isAdmin) {
+function checkItem_(c, cur, decider, isAdmin, corrector) {
   if (c.deleted && !isAdmin) throw new Error('Only the Admin can delete a received item.');
   const d = c.data || {}, old = cur && cur.data ? cur.data : null;
+  // Corrections (date received, period, names, unticking a document) are for the Admin and the SA only.
+  if (old && !corrector) {
+    const same = function (k) { return JSON.stringify(d[k] === undefined ? null : d[k]) === JSON.stringify(old[k] === undefined ? null : old[k]); };
+    const unticked = (old.checklist || []).some(function (x, k) { return x.ok && !((d.checklist || [])[k] || {}).ok; });
+    if (!same('corrections') || !same('receivedAt') || !same('period') || !same('submittedBy') || !same('submittedDesignation') || !same('subject') || unticked)
+      throw new Error('Only the Admin or the SA can correct a received record.');
+  }
   const decided = function (x) { return x && x.decision ? JSON.stringify(x.decision) : ''; };
   if (!decider && (decided(d) !== decided(old) || ((d.status === 'accepted' || d.status === 'rejected') && (!old || old.status !== d.status))))
     throw new Error('Only an auditor (ATL, Team Member, SA or Admin) can accept or reject.');
