@@ -4,6 +4,7 @@ import { store, newId } from '../../js/store.js';
 import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
+import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn } from './receiving.js';
 
 // Load this module's look once.
@@ -49,7 +50,9 @@ async function loadRms() {
   const now = new Date();
   return { reports: reports.map((r) => ({ id: r.id, ...r.data })), offices: offices.map((o) => ({ id: o.id, ...o.data })),
     // _new: received on this computer but not yet sent to the AMS database (its number is not yet confirmed).
-    items: items.map((i) => ({ id: i.id, ...unpackItem(i.data), ...(i.pending && !i.version ? { _new: true } : {}) })),
+    // Received items (Incoming) and sent items (Outgoing, kind 'out') are kept in the same list in the database.
+    items: items.filter((i) => i.data && i.data.kind !== 'out').map((i) => ({ id: i.id, ...unpackItem(i.data), ...(i.pending && !i.version ? { _new: true } : {}) })),
+    outs: items.filter((i) => i.data && i.data.kind === 'out').map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
     // Report groups made by the team (Report Library), in their set order.
     groups: (groups && groups.data && groups.data.list) || [],
     startPeriod: (settings && settings.data && settings.data.startPeriod) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
@@ -153,16 +156,17 @@ function overdueAll(refs, rms, year) {
 }
 
 /* ---------- page frame ---------- */
-function navItems(refs, overdueN, pendingN) {
+function navItems(refs, overdueN, pendingN, awaitN) {
   if (jobOrderOnly(refs)) return [
-    { key: 'receiving', label: 'Receiving', icon: 'inbox', href: '#/rms/receiving' },
+    { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving' },
+    { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
     { key: 'records', label: 'Records & Storage', icon: 'box', soon: true },
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true }];
   return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
     { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
-    { key: 'receiving', label: 'Receiving', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
-    { key: 'logbook', label: 'Logbook', icon: 'book', soon: true },
+    { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
+    { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
     { key: 'records', label: 'Records & Storage', icon: 'box', soon: true },
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true },
     { section: true, label: 'SETUP' },
@@ -177,24 +181,27 @@ export async function render(ctx) {
   const jo = jobOrderOnly(refs);
   let view = parts[0] || 'overview';
   if (view === 'setup') view = parts[1] === 'offices' ? 'offices' : 'library';
-  if (jo && !['receiving'].includes(view)) view = 'receiving';
+  if (view === 'incoming') view = 'receiving';
+  if (jo && !['receiving', 'outgoing'].includes(view)) view = 'receiving';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Receiving' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
   const pendingN = jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length;
   const body = view === 'receiving' ? receivingHtml(refs, rms, q)
+    : view === 'outgoing' ? outgoingHtml(refs, rms, q)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
     : overviewHtml(refs, rms, overdue);
   const me = refs.me ? refs.me.data : { name: ctx.session.name || ctx.session.email };
   const roleText = [refs.me?.data.position, roleLine(refs)].filter(Boolean).join(' · ');
-  app.innerHTML = moduleFrame({ title: 'Records<br>Management', items: navItems(refs, overdue.length, pendingN), active: view, crumb: crumbs[view] || 'Overview', me, roleText, body });
+  app.innerHTML = moduleFrame({ title: 'Records<br>Management', items: navItems(refs, overdue.length, pendingN, awaitingCount(refs, rms)), active: view, crumb: crumbs[view] || 'Overview', me, roleText, body });
   $$('[data-soon]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); toast(`${a.dataset.soon} comes next. It is not built yet.`); }; });
   if (view === 'offices') wireOffices(refs, rms, q);
   else if (view === 'library') wireLibrary(refs, rms);
   else if (view === 'monitor') wireMonitor(refs, rms, q);
   else if (view === 'receiving') wireReceiving(refs, rms, q, ctx.rerender);
+  else if (view === 'outgoing') wireOutgoing(refs, rms, q);
 }
 
 /* ================= Overview ================= */

@@ -145,3 +145,10 @@ details.acc[open] > summary:before{content:"▾"}
 .rcv-exist{border:1px solid #9fc0ff; background:#eef4ff; border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.5}
 .rcv-exist[hidden]{display:none}
 #tx-list .t-row[hidden], #tx-none[hidden]{display:none}
+
+/* Outgoing – 20 Oct 2026 */
+.out-filters{align-items:center}
+.out-filters .seg{margin-left:0}
+.out-filters .input{width:auto}
+.out-note{padding:12px 22px; color:var(--muted); font-size:12.5px; border-top:1px solid var(--line)}
+#out-list .t-row[hidden], #out-none[hidden]{display:none}

@@ -293,7 +293,7 @@ export function receivingHtml(refs, rms, q) {
     <span><small>${esc(fmtDate(i.receivedAt))}${encodedLater(i) ? '<br><i>encoded later</i>' : '<br>' + esc(new Date(i.receivedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}</small></span><span>${statusPill(i)}</span><span class="acts">${acts}</span></div>`;
   const groups = rms.groups || [];
   const gOpt = (v, t) => `<option value="${esc(v)}" ${g === v ? 'selected' : ''}>${esc(t)}</option>`;
-  return `<div class="hello"><div><h1>Receiving</h1><p>Record what the offices submit. Every receipt gets its tracking number right away. Reports received by the JO are For Verification until an auditor accepts or rejects them.</p></div>
+  return `<div class="hello"><div><h1>Incoming</h1><p>Record what comes in from the offices and from outside. Every receipt gets its tracking number right away. Reports received by the JO are For Verification until an auditor accepts or rejects them.</p></div>
       <button class="btn primary" type="button" id="rcv-new">+ Receive Documents</button></div>
     <div class="rcv-filter"><label for="rcv-g">Group</label><select class="input" id="rcv-g">${gOpt('all', 'All groups')}${groups.map((x) => gOpt(x.id, x.name)).join('')}${gOpt('none', 'No group')}${gOpt('comm', 'Communications')}</select></div>
     ${verify.length ? `<section class="panel"><div class="panel-head"><h2>For Verification · ${verify.length}</h2></div>
