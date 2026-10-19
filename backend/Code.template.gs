@@ -2,20 +2,30 @@
  * AMS – Audit Management System · COA Quirino
  * Database script. It lives inside the "AMS Database" Google Sheet owned by the AMS Gmail.
  *
- * Fill in the two lines below, run setup() once, then Deploy → New deployment → Web app
+ * New database: fill in the two lines below, run setup() once, then Deploy → New deployment → Web app
  * (Execute as: Me · Who has access: Anyone). See SETUP.md.
+ * Updating an existing database: replace this whole file, then Deploy → Manage deployments → Edit → Version: New version.
  */
-const CLIENT_ID = 'PASTE-THE-CLIENT-ID-HERE.apps.googleusercontent.com';   // from Google Cloud → Credentials
-const FIRST_ADMIN_EMAIL = 'paste.the.admin.gmail@gmail.com';               // the Gmail that will be the first Admin
+const CLIENT_ID = '__CLIENT_ID__';   // from Google Cloud → Credentials
+const FIRST_ADMIN_EMAIL = 'paste.the.admin.gmail@gmail.com';               // only needed by setup() for a new database
 
-const TABLES = ['users', 'teams', 'lgus'];
+// Core lists, then Records Management (added 19 Oct 2026). A missing sheet is made the first time it is used.
+const TABLES = ['users', 'teams', 'lgus', 'rms_reports', 'rms_offices', 'rms_items', 'rms_settings'];
 const ADMIN_TABLES = { users: true, teams: true, lgus: true };            // only the Admin may change these
+// Who may change the Records Management lists (by role).
+const TABLE_ROLES = {
+  rms_reports: ['admin', 'osa'],                                  // Report Library: Admin and SA Staff
+  rms_settings: ['admin', 'osa'],                                 // monitoring start, report groups
+  rms_offices: ['admin', 'sa', 'atl', 'member'],                  // Office Setup
+  rms_items: ['admin', 'sa', 'atl', 'member', 'osa', 'staff']     // Receiving: everyone with a role
+};
+const DECIDERS = ['admin', 'sa', 'atl', 'member'];                // may accept or reject (not JO or SA Staff)
 const HEAD = ['id', 'version', 'updatedAt', 'updatedBy', 'deleted', 'data'];
 const SEED = __SEED__;
 
 /* ---------- one-time setup ---------- */
 function setup() {
-  if (CLIENT_ID.indexOf('PASTE') === 0 || FIRST_ADMIN_EMAIL.indexOf('paste') === 0) throw new Error('Fill in CLIENT_ID and FIRST_ADMIN_EMAIL at the top first.');
+  if (CLIENT_ID.indexOf('PASTE') === 0 || CLIENT_ID.indexOf('__') === 0 || FIRST_ADMIN_EMAIL.indexOf('paste') === 0) throw new Error('Fill in CLIENT_ID and FIRST_ADMIN_EMAIL at the top first.');
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   TABLES.concat(['log']).forEach(function (name) {
     let sh = ss.getSheetByName(name);
@@ -49,9 +59,9 @@ function doPost(e) {
     const me = readAll_('users').filter(function (u) { return !u.deleted && String(u.data.email).toLowerCase() === email; })[0];
     if (!me || me.data.status === 'disabled') throw new Error('This Gmail (' + email + ') is not registered in AMS. Ask the Admin to add it.');
     if (me.data.status === 'invited') markActive_(me, email);
-    const isAdmin = (me.data.roles || []).indexOf('admin') >= 0;
+    const roles = me.data.roles || [];
     if (req.action === 'pull') return json_({ ok: true, records: pull_(req.since), serverTime: new Date().toISOString() });
-    if (req.action === 'push') return json_({ ok: true, results: push_(req.changes || [], email, isAdmin) });
+    if (req.action === 'push') return json_({ ok: true, results: push_(req.changes || [], email, roles) });
     throw new Error('Unknown action');
   } catch (err) {
     return json_({ ok: false, error: String(err.message || err) });
@@ -76,7 +86,12 @@ function verify_(token) {
 }
 
 /* ---------- read and write ---------- */
-function sheet_(table) { return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(table); }
+function sheet_(table) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(table);
+  if (!sh && TABLES.indexOf(table) >= 0) { sh = ss.insertSheet(table); sh.appendRow(HEAD); sh.setFrozenRows(1); }
+  return sh;
+}
 
 function readAll_(table) {
   const sh = sheet_(table); const n = sh.getLastRow();
@@ -102,7 +117,9 @@ function pull_(since) {
   return out;
 }
 
-function push_(changes, email, isAdmin) {
+function push_(changes, email, roles) {
+  const isAdmin = roles.indexOf('admin') >= 0;
+  const has = function (list) { return roles.some(function (r) { return list.indexOf(r) >= 0; }); };
   const lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
     const log = sheet_('log');
@@ -111,10 +128,12 @@ function push_(changes, email, isAdmin) {
       try {
         if (TABLES.indexOf(c.table) < 0) throw new Error('Unknown list: ' + c.table);
         if (ADMIN_TABLES[c.table] && !isAdmin) throw new Error('Only the Admin can change ' + c.table + '.');
+        if (TABLE_ROLES[c.table] && !has(TABLE_ROLES[c.table])) throw new Error('Your role cannot change this (' + c.table + ').');
         const row = findRow_(c.table, c.id), sh = sheet_(c.table);
         const cur = row ? rec_(sh.getRange(row, 1, 1, HEAD.length).getValues()[0]) : null;
         if ((cur ? cur.version : 0) !== Number(c.baseVersion || 0)) { res.status = 'conflict'; res.record = cur; return res; }
         if (c.table === 'users' && !c.deleted) checkUser_(c, email);
+        if (c.table === 'rms_items') checkItem_(c, cur, has(DECIDERS), isAdmin);
         const next = [c.id, (cur ? cur.version : 0) + 1, new Date().toISOString(), email, !!c.deleted, JSON.stringify(c.data)];
         if (row) sh.getRange(row, 1, 1, HEAD.length).setValues([next]); else sh.appendRow(next);
         log.appendRow([next[2], email, row ? (c.deleted ? 'deleted' : 'changed') : 'added', c.table, c.id]);
@@ -123,6 +142,29 @@ function push_(changes, email, isAdmin) {
       return res;
     });
   } finally { lock.releaseLock(); }
+}
+
+/* ---------- Records Management: receiving ---------- */
+// Tracking numbers are given here, so two people receiving at the same time never get the same number.
+// One running series per office per year: MAD-ABB-RCI-2026-0012 (reports), MAD-ABB-2026-0013 (communications), OUT-2026-0004.
+// Once given, a record's number never changes. Only auditors may accept or reject.
+function checkItem_(c, cur, decider, isAdmin) {
+  if (c.deleted && !isAdmin) throw new Error('Only the Admin can delete a received item.');
+  const d = c.data || {}, old = cur && cur.data ? cur.data : null;
+  const decided = function (x) { return x && x.decision ? JSON.stringify(x.decision) : ''; };
+  if (!decider && (decided(d) !== decided(old) || ((d.status === 'accepted' || d.status === 'rejected') && (!old || old.status !== d.status))))
+    throw new Error('Only an auditor (ATL, Team Member, SA or Admin) can accept or reject.');
+  if (old && old.trackingNo) { d.trackingNo = old.trackingNo; d.series = old.series; d.trackingYear = old.trackingYear; d.seriesKey = old.seriesKey; return; }
+  if (!d.trackingNo) return;
+  const year = Number(d.trackingYear) || new Date().getFullYear(), key = d.seriesKey || d.officeId;
+  let n = 0;
+  readAll_('rms_items').forEach(function (r) {
+    const x = r.data || {};
+    if (r.id !== c.id && x.trackingNo && (x.seriesKey || x.officeId) === key && Number(x.trackingYear) === year) n = Math.max(n, Number(x.series) || 0);
+  });
+  const code = key === 'outside' ? 'OUT' : d.officeCode;
+  d.series = n + 1; d.trackingYear = year; d.seriesKey = key;
+  d.trackingNo = [code, d.kind === 'comm' ? '' : d.reportCode, year, ('000' + d.series).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
 }
 
 // Same Gmail twice is not allowed; the Admin cannot remove their own Admin access.

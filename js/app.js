@@ -7,6 +7,7 @@ import { $, toast, bottomBand } from './ui.js';
 import { loginHtml } from './views/login.js';
 import { dashboardHtml } from './views/dashboard.js';
 import { MODULES } from './modules.js';
+import { DEMO_JO } from './seed.js';
 import { adminBar, notAdmin, roleLine, usersHtml, wireUsers, teamsHtml, wireTeams, lgusHtml, wireLgus } from './views/admin.js';
 
 const app = document.getElementById('app');
@@ -30,6 +31,11 @@ async function showLogin(error = '') {
   app.innerHTML = loginHtml(error);
   if (DEMO) {
     $('#demo-signin').addEventListener('click', async () => { await auth.demoSignIn(); enter(); });
+    // Demo Mode only: sign in as the sample JO account (added to Users & Roles the first time).
+    $('#demo-jo').addEventListener('click', async () => {
+      if (!(await store.list('users')).some((u) => u.id === DEMO_JO.id)) await store.save('users', DEMO_JO.id, DEMO_JO, 'setup');
+      await auth.demoSignIn('jo'); enter();
+    });
     return;
   }
   try { await auth.renderButton($('#gsi-btn')); }
@@ -83,6 +89,18 @@ async function render() {
     render.sameRoute = location.hash;
     return;
   }
+  // A finished module opens from its card: #/<module id>/...  (its code lives in modules/<id>/)
+  const mod = MODULES.find((m) => m.id === part[0] && m.ready && m.entry);
+  if (mod) {
+    const y = window.scrollY, same = render.sameRoute === location.hash;
+    render.sameRoute = location.hash;
+    try {
+      const m = await import('../' + mod.entry);
+      await m.render({ app, refs, q, parts: part.slice(1), session: auth.session, rerender: render, syncHtml: syncPill() });
+      if (same) window.scrollTo(0, y);
+    } catch (e) { app.innerHTML = `<div class="page"><div class="msg bad">${e.message}</div><a class="btn" href="#/">← Back to Dashboard</a></div>`; }
+    return;
+  }
   render.sameRoute = '';
   showDashboard(refs);
 }
@@ -109,6 +127,11 @@ function showDashboard(refs) {
 }
 
 window.addEventListener('hashchange', () => render());
+// Sign Out from inside a module (the module frame's top bar).
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest || !e.target.closest('#m-signout')) return;
+  await auth.signOut(); history.replaceState(null, '', '#/'); showLogin();
+});
 window.addEventListener('sync-status', (e) => {
   const el = document.getElementById('sync'); if (el) el.outerHTML = syncPill(e.detail);
   if (e.detail.status === 'error' && e.detail.message) toast(e.detail.message, 'bad');

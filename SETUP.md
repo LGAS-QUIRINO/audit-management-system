@@ -40,8 +40,10 @@ Use a private/incognito window if other Google accounts are signed in on the bro
 Claude puts them in `js/config.js`. From then on, the site signs in with real Gmail accounts and saves to the AMS Database.
 
 ## Later updates to the database script
-When `backend/Code.gs` changes: paste the new code (keep your two lines at the top), **Save**, then
+When `backend/Code.gs` changes: select everything in the script editor and paste the new code (the Client ID is already filled in; `FIRST_ADMIN_EMAIL` is only needed for a new database), **Save**, then
 **Deploy** → **Manage deployments** → pencil icon → Version: **New version** → **Deploy**. The Web app URL stays the same.
+
+New sheet tabs (e.g. `rms_items`) are made by the script the first time they are used; there is no need to run `setup` again.
 
 ## Good to know
 - The first Admin's name shows as `ADMIN` until it is edited in **Users & Roles**.
