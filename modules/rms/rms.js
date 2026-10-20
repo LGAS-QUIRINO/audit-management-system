@@ -110,7 +110,7 @@ function cellStatus(rms, office, r, p, now = new Date()) {
   if (!due) return { s: new Date(y, b, 0) < now ? 'nodue' : 'notdue', due };
   return { s: now > due ? 'overdue' : 'notdue', due };
 }
-const MARK = { complete: '✓', late: 'L', verify: 'V', incomplete: '½', overdue: '!', notdue: '·', untracked: '—', nodue: '·' };
+const MARK = { complete: '✓', late: 'L', verify: 'V', incomplete: 'M', overdue: '!', notdue: '·', untracked: '—', nodue: '·' };
 const STATUS_TEXT = { complete: 'Accepted, all submitted', late: 'Accepted, all submitted but late', verify: 'Received, for verification', incomplete: 'Accepted, missing documents', overdue: 'Overdue', notdue: 'Not yet due', untracked: 'Before monitoring started', nodue: 'Not yet submitted (no set due date)' };
 const STATUS_PILL = { complete: 'ok', late: 'late', verify: 'blue', incomplete: 'warn', overdue: 'bad' };
 
@@ -282,6 +282,59 @@ const countOf = (x) => { const agg = x.st && x.st.agg; if (!agg || !x.c.r.perOff
   const ck = agg.checklist;
   if (isGrouped(ck)) { const t = lineTally(ck); return `<small class="cnt">${t.done.length}/${t.total}</small>`; }
   return `<small class="cnt">${ck.filter((c) => c.ok).length}/${ck.length}</small>`; };
+// One bank account (a line of an office's own list) for one period, over all transmittals of that period:
+// complete / late (all required parts in) · verify (in a transmittal still for verification) · incomplete (a required
+// part missing) · overdue / notdue / nodue (nothing submitted for that account) · untracked (before monitoring).
+function acctStatus(rms, office, r, p, line, now = new Date()) {
+  { const [y, , e] = span(p); if (`${y}-${String(e).padStart(2, '0')}` < rms.startPeriod) return { s: 'untracked' }; }
+  const due = dueDate(r, p), recs = periodRecs(rms, office.id, r.id, p);
+  const ents = recs.length ? periodState(recs).checklist.filter((c) => c.line === line) : [];
+  const mine = recs.filter((x) => (x.checklist || []).some((c) => c.line === line && (c.ok || c.na)));
+  if (mine.length) {
+    if (mine.some(isVerify)) return { s: 'verify', due, recs: mine, ents };
+    if (!ents.every(isIn)) return { s: 'incomplete', due, recs: mine, ents };
+    const done = ents.filter((c) => c.ok && !c.optional).reduce((m, c) => (c.at > m ? c.at : m), '');
+    return { s: due && done && new Date(done) > due ? 'late' : 'complete', due, recs: mine, ents };
+  }
+  const [y, , b] = span(p);
+  if (!due) return { s: new Date(y, b, 0) < now ? 'nodue' : 'notdue', due, recs: [], ents };
+  return { s: now > due ? 'overdue' : 'notdue', due, recs: [], ents };
+}
+function acctHtml(refs, rms, q, ctx) {
+  const { scopes, scopeId, year, r, reports, label, qs } = ctx;
+  const now = new Date();
+  const per = reports.filter((x) => x.perOffice);
+  const offs = visibleOffices(refs, rms, scopeId === 'all' ? scopes.map((s) => s.id) : [scopeId])
+    .filter((o) => (o.reportIds || []).includes(r.id) && ((o.lists || {})[r.id] || []).length);
+  const oid = offs.some((o) => o.id === q.get('o')) ? q.get('o') : 'all';
+  const shownOffs = oid === 'all' ? offs : offs.filter((o) => o.id === oid);
+  const ps = periodsOf(r, year);
+  const tally = {};
+  const body = shownOffs.map((o) => {
+    const lines = o.lists[r.id];
+    return `<tr class="acct-off" data-off="${esc(o.id)}"><th colspan="${ps.length + 2}">${esc(o.label)} <small class="mono">${esc(o.code || '')}</small> · ${lines.length} ${esc(((r.lineLabel || 'account') + 's').toLowerCase())}</th></tr>`
+      + lines.map((line, li) => {
+        const cs = ps.map((p) => { const st = acctStatus(rms, o, r, p, line, now); tally[st.s] = (tally[st.s] || 0) + 1; return { p, st }; });
+        const dueN = cs.filter((x) => !['untracked', 'notdue'].includes(x.st.s)).length, okN = cs.filter((x) => ['complete', 'late'].includes(x.st.s)).length;
+        return `<tr data-off="${esc(o.id)}" data-find="${esc((line + ' ' + o.label).toLowerCase())}"><th>${esc(line)}</th>
+          ${cs.map((x) => `<td class="c ${x.st.s}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}</td>`).join('')}
+          <td class="acct-n"><small>${okN} of ${dueN}</small></td></tr>`;
+      }).join('');
+  }).join('');
+  return `<div class="mon-filters">
+      <label>Municipality<select class="input" data-f="m"><option value="all">All my municipalities</option>${scopes.map((s) => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
+      <label>Report<select class="input" data-f="r">${per.map((x) => `<option value="${x.id}" ${x.id === r.id ? 'selected' : ''}>${esc(x.code + ' · ' + x.name)}</option>`).join('')}</select></label>
+      <label>Office<select class="input" data-f="o"><option value="all">All offices</option>${offs.map((o) => `<option value="${o.id}" ${o.id === oid ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>
+      <label>Year<select class="input" data-f="y">${[now.getFullYear(), now.getFullYear() - 1].map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+      <label>Search<input class="input" id="acct-find" placeholder="e.g. DPWH, TF, 0732-1080"></label>
+      <div class="seg"><a href="${qs({ v: 'month' })}">By Period</a><a href="${qs({ v: 'report' })}">By Report</a><a href="${qs({ v: 'acct' })}" class="on">By Bank Account</a></div>
+    </div>
+    <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}</div>
+    ${shownOffs.length ? `<div class="mon-wrap"><table class="mon acct"><thead><tr><th>${esc(r.lineLabel || 'Account')}</th>${ps.map((p) => `<th>${esc(periodShort(p))}</th>`).join('')}<th>Months</th></tr></thead><tbody>${body}</tbody></table></div>`
+      : `<div class="empty"><b>No ${esc(((r.lineLabel || 'account') + 's').toLowerCase())} listed yet</b>Add each office's list in Office Setup (${esc(r.code)}).</div>`}
+    <div class="note">Per ${esc((r.lineLabel || 'account').toLowerCase())}, over all transmittals of each month. ✓ all required parts in · L in but late · V in a transmittal still for verification · M a required part missing · ! not submitted and overdue · · not yet due. "Months" = complete months of those already due.</div>`;
+}
+
 function monitorHtml(refs, rms, q) {
   const scopes = scopesFor(refs);
   if (!scopes.length) return `<div class="msg bad">No team is assigned to you yet. Ask the Admin to set your team in Users &amp; Roles.</div>`;
@@ -291,9 +344,13 @@ function monitorHtml(refs, rms, q) {
   const scopeId = q.get('m') === 'all' || !q.get('m') ? 'all' : (scopes.some((s) => s.id === q.get('m')) ? q.get('m') : 'all');
   const now = new Date();
   const year = +(q.get('y') || now.getFullYear());
-  const mode = q.get('v') === 'report' ? 'report' : 'month';
+  const mode = q.get('v') === 'report' ? 'report' : q.get('v') === 'acct' ? 'acct' : 'month';
   const show = q.get('show') || 'all';
-  const rid = reports.some((r) => r.id === q.get('r')) ? q.get('r') : reports[0].id;
+  // By Bank Account: reports with each office's own list (e.g. BRS) only.
+  const firstPer = reports.find((x) => x.perOffice);
+  const rid = mode === 'acct' ? (reports.some((r) => r.id === q.get('r') && r.perOffice) ? q.get('r') : firstPer && firstPer.id)
+    : reports.some((r) => r.id === q.get('r')) ? q.get('r') : reports[0].id;
+  if (mode === 'acct' && !rid) return `<div class="hello"><div><h1>Submission Monitor</h1></div></div><section class="panel"><div class="empty"><b>No report has a list per office</b>Mark a report (e.g. BRS) "Each office has its own list" in the Report Library.</div></section>`;
   const r = reports.find((x) => x.id === rid);
   const month = Math.min(12, Math.max(1, +(q.get('mo') || (now.getFullYear() === year ? now.getMonth() || 1 : 12))));
   const scopeIds = scopeId === 'all' ? scopes.map((s) => s.id) : [scopeId];
@@ -311,8 +368,13 @@ function monitorHtml(refs, rms, q) {
     const spans = []; columns.forEach((c) => { const n = groupName(rms, c.r) || 'No group'; const last = spans[spans.length - 1]; if (last && last.n === n) last.k++; else spans.push({ n, k: 1 }); });
     return `<tr class="grp"><th></th>${spans.map((x) => `<th colspan="${x.k}">${esc(x.n)}</th>`).join('')}</tr>`; })() : '';
   const tally = {}; grid.forEach((g) => g.cs.forEach((x) => { if (x.st) tally[x.st.s] = (tally[x.st.s] || 0) + 1; }));
-  const qs = (patch) => { const o = { m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
+  const qs = (patch) => { const o = { m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...(q.get('o') ? { o: q.get('o') } : {}), ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
   const years = [now.getFullYear(), now.getFullYear() - 1];
+  if (mode === 'acct') return `<div class="hello"><div><h1>Submission Monitor</h1><p>Per bank account: which months came in. Click a cell to see its details.</p></div>
+      <button class="btn" type="button" id="mon-print">Print</button></div>
+    <section class="panel">${acctHtml(refs, rms, q, { scopes, scopeId, year, r, reports, label, qs })}</section>
+    <section class="panel" id="cell-detail" hidden></section>`;
+  const hasPer = reports.some((x) => x.perOffice);
   return `<div class="hello"><div><h1>Submission Monitor</h1><p>Which office submitted what, period by period. Click a cell to see its details.</p></div>
       <button class="btn" type="button" id="mon-print">Print</button></div>
     <section class="panel">
@@ -322,9 +384,9 @@ function monitorHtml(refs, rms, q) {
           : `<label>Month<select class="input" data-f="mo">${MONTHS_LONG.map((m, i) => `<option value="${i + 1}" ${i + 1 === month ? 'selected' : ''}>${m}</option>`).join('')}</select></label>`}
         <label>Year<select class="input" data-f="y">${years.map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
         <label>Show<select class="input" data-f="show"><option value="all">All offices</option><option value="overdue" ${show === 'overdue' ? 'selected' : ''}>With overdue only</option><option value="verify" ${show === 'verify' ? 'selected' : ''}>For verification only</option><option value="incomplete" ${show === 'incomplete' ? 'selected' : ''}>Missing documents only</option></select></label>
-        <div class="seg"><a href="${qs({ v: 'month' })}" class="${mode === 'month' ? 'on' : ''}">By Period</a><a href="${qs({ v: 'report' })}" class="${mode === 'report' ? 'on' : ''}">By Report</a></div>
+        <div class="seg"><a href="${qs({ v: 'month' })}" class="${mode === 'month' ? 'on' : ''}">By Period</a><a href="${qs({ v: 'report' })}" class="${mode === 'report' ? 'on' : ''}">By Report</a>${hasPer ? `<a href="${qs({ v: 'acct', r: (r && r.perOffice ? r.id : firstPer.id) })}">By Bank Account</a>` : ''}</div>
       </div>
-      <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('½ Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}</div>
+      <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}</div>
       ${shown.length ? `<div class="mon-wrap"><table class="mon"><thead>${groupRow}<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr></thead><tbody>
         ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small></th>${g.cs.map((x) => x.st
           ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}${countOf(x)}</td>` : '<td class="c na"></td>').join('')}</tr>`).join('')}
@@ -339,6 +401,26 @@ function wireMonitor(refs, rms, q) {
   $$('[data-f]').forEach((s) => { s.onchange = () => {
     const p = new URLSearchParams(location.hash.split('?')[1] || ''); p.set(s.dataset.f, s.value); location.hash = '#/rms/monitor?' + p.toString(); }; });
   const pr = $('#mon-print'); if (pr) pr.onclick = () => window.print();
+  // By Bank Account: search, and the details of one account for one month.
+  const af = $('#acct-find'); if (af) af.oninput = () => { const v = af.value.trim().toLowerCase();
+    $$('table.acct tbody tr[data-find]').forEach((tr) => { tr.hidden = v && !v.split(/\s+/).every((w) => tr.dataset.find.includes(w)); });
+    $$('table.acct tr.acct-off').forEach((h) => { h.hidden = !!v && !$$(`table.acct tr[data-find][data-off="${h.dataset.off}"]`).some((tr) => !tr.hidden); }); };
+  $$('[data-acell]').forEach((td) => { td.onclick = () => {
+    $$('td.c.picked').forEach((x) => x.classList.remove('picked')); td.classList.add('picked');
+    const [oid, li, p] = td.dataset.acell.split('|');
+    const r = rms.reports.find((x) => x.id === (new URLSearchParams(location.hash.split('?')[1] || '').get('r'))) || rms.reports.find((x) => x.perOffice);
+    const o = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((x) => x.id === oid), line = o.lists[r.id][+li];
+    const st = acctStatus(rms, o, r, p, line);
+    const row = (k, v) => `<div class="t-row" style="grid-template-columns:150px 1fr"><small>${k}</small><span>${v}</span></div>`;
+    const box = $('#cell-detail'); box.hidden = false;
+    const miss = st.ents.filter((c) => !isIn(c)).map((c) => c.part), att = st.ents.filter((c) => c.optional && c.ok).map((c) => c.part);
+    box.innerHTML = `<div class="panel-head"><h2>${esc(line)} · ${esc(r.code)} · ${esc(periodLabel(p))}</h2><span class="r">${pill(STATUS_TEXT[st.s], STATUS_PILL[st.s] || '')}</span></div>
+      ${row('Office', esc(o.label))}${row('Due', st.due ? esc(fmtDate(st.due)) : 'No set due date')}
+      ${row('Transmittals', st.recs.length ? st.recs.map((x) => `<div><span class="mono">${esc(numberOf(x))}</span> ${statusPill(x)} <small>received ${esc(fmtDate(x.receivedAt))}</small></div>`).join('') : (st.s === 'untracked' ? 'Before monitoring started' : 'Not submitted yet'))}
+      ${st.recs.length ? row('Parts', st.ents.map((c) => (c.ok ? '✓ ' : c.na ? '– ' : c.optional ? '· ' : '✗ ') + esc(c.part) + (c.optional && !c.ok ? ' (none)' : '')).join(' &nbsp; ')) : ''}
+      ${miss.length ? row('Missing', esc(miss.join(', '))) : ''}${att.length ? row('Attached', esc(att.join(', '))) : ''}`;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }; });
   $$('[data-cell]').forEach((td) => { td.onclick = () => {
     $$('td.c.picked').forEach((x) => x.classList.remove('picked')); td.classList.add('picked');
     const [oid, rid, p] = td.dataset.cell.split('|');
