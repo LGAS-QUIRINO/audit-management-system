@@ -445,7 +445,7 @@ function viewReport(rms, id) {
   const r = rms.reports.find((x) => x.id === id);
   modal({ title: `${r.code} · ${r.name}`, body: `<p><b>Schedule:</b> ${esc(r.frequency)} · ${esc(dueText(r))}</p><p><b>Group:</b> ${esc(groupName(rms, r) || 'No group')}${r.bulk ? ' · Bulk (always For Verification)' : ''}</p>${r.basis ? `<p><b>Legal basis:</b> ${esc(r.basis)}</p>` : ''}
     ${r.perOffice ? `<p><b>Checklist:</b> each office has its own list (one line per ${esc((r.lineLabel || 'line').toLowerCase())}), set in Office Setup; each ${esc((r.lineLabel || 'line').toLowerCase())} has the checklist below.</p>` : ''}
-    <div><span class="legend">${r.perOffice ? 'Checklist for each ' + esc((r.lineLabel || 'line').toLowerCase()) : 'Checklist'}</span><ol class="rms-ol">${(r.checklist || []).map((c) => `<li>${esc(c)}${(r.optional || []).includes(c) ? ' <small>(optional – N/A allowed)</small>' : ''}</li>`).join('')}</ol></div>` });
+    <div><span class="legend">${r.perOffice ? 'Checklist for each ' + esc((r.lineLabel || 'line').toLowerCase()) : 'Checklist'}</span><ol class="rms-ol">${(r.checklist || []).map((c) => `<li>${esc(c)}${(r.optional || []).includes(c) ? ' <small>(optional – ticked only when attached)</small>' : ''}</li>`).join('')}</ol></div>` });
 }
 
 async function editReport(refs, rms, id) {
@@ -481,7 +481,7 @@ async function editReport(refs, rms, id) {
       const draw = () => {
         const per = $('#r-per', bg) && $('#r-per', bg).checked;
         $('#r-items', bg).innerHTML = items.map((t, i) => `<div><span class="n">${i + 1}.</span><span class="txt">${esc(t)}</span>
-            ${per ? `<button type="button" class="req-tog ${optional.has(t) ? 'opt' : ''}" data-opt="${i}" title="Click to switch">${optional.has(t) ? 'Optional (N/A allowed)' : 'Required'}</button>` : ''}
+            ${per ? `<button type="button" class="req-tog ${optional.has(t) ? 'opt' : ''}" data-opt="${i}" title="Click to switch">${optional.has(t) ? 'Optional' : 'Required'}</button>` : ''}
             <button type="button" class="mini" data-up="${i}" ${i ? '' : 'disabled'} aria-label="Move up">↑</button>
             <button type="button" class="mini" data-rm="${i}" aria-label="Remove">×</button></div>`).join('')
           + `<div><input class="input" id="r-new" placeholder="+ Add a document to the checklist, then press Enter"></div>`;

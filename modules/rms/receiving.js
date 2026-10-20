@@ -13,7 +13,12 @@ import { scopesFor, visibleOffices, periodsOf, periodLabel, dueDate, span, fmtDT
 const by = (refs) => refs.me?.data.email || '';
 const myName = (refs) => refs.me?.data.name || '';
 // A document counts as in when submitted, or marked N/A (optional parts only, e.g. BRS parts that do not apply).
-export const isIn = (c) => !!(c.ok || c.na);
+// Optional parts (e.g. Schedule of Reconciling Items) never count as missing: ticked = attached, not ticked = none.
+// (N/A marks on records saved before 20 Oct 2026 also count as in.)
+export const isIn = (c) => !!(c.ok || c.na || c.optional);
+const present = (c) => !!(c.ok || c.na);
+// Optional parts attached for an account in this transmittal (shown as "+ …").
+const attached = (i, line) => (i.checklist || []).filter((c) => c.line === line && c.optional && c.ok).map((c) => c.part);
 // Stored compactly: for per-account entries the name ("account · part") is not repeated; it is rebuilt when loaded.
 // (Large BRS records otherwise pass the 50,000-character limit of a Google Sheets cell.)
 export function packItem(d) {
@@ -73,7 +78,7 @@ export function transmittalHtml(i, agg, { total = true } = {}) {
     const lacks = (l) => agg.checklist.filter((c) => c.line === l && !isIn(c)).map((c) => c.part);
     const t = lineTally(agg.checklist);
     return `<p><b>${mine.length} ${esc(mine.length === 1 ? lbl.slice(0, -1) : lbl)} in this transmittal</b></p>
-      <ul class="rcv-ck">${mine.map((l) => { const m = lacks(l); return `<li class="${m.length ? 'miss' : 'ok'}">${esc(l)}${m.length ? ` <small>— missing ${esc(m.join(', '))}</small>` : ''}</li>`; }).join('')}</ul>
+      <ul class="rcv-ck">${mine.map((l) => { const m = lacks(l), a = attached(i, l); return `<li class="${m.length ? 'miss' : 'ok'}">${esc(l)}${m.length ? ` <small>— missing ${esc(m.join(', '))}</small>` : ''}${a.length ? ` <small>+ ${esc(a.join(', '))}</small>` : ''}</li>`; }).join('')}</ul>
       ${total ? `<p class="hint">Period total: <b>${t.done.length} of ${t.total} ${esc(lbl)} complete</b> over ${agg.recs.length} transmittal${agg.recs.length > 1 ? 's' : ''}. The Submission Monitor shows what is still missing.</p>` : ''}`;
   }
   const got = (i.checklist || []).filter((c) => c.ok || c.na), miss = agg.checklist.filter((c) => !isIn(c));
@@ -157,29 +162,26 @@ export function lineTally(ck) {
 // Accordions: one per line, each opening to its parts as checkboxes (name), with a count and Tick all.
 function accordionHtml(ck, { name, onlyMissing = false, hideAll = false, checked = (e) => e.ok, naChecked = (e) => !!e.na, open = false }) {
   return linesOf(ck).map(([line, es]) => {
-    const shown = onlyMissing ? es.filter((e) => !isIn(e)) : es;
+    const shown = onlyMissing ? es.filter((e) => !present(e)) : es;
     if (!shown.length) return '';
     return `<details class="acc" data-line="${esc(line)}" data-t="${esc(line.toLowerCase())}" ${hideAll ? 'hidden' : ''} ${open ? 'open' : ''}>
       <summary><span class="acc-l">${esc(line)}</span><span class="acc-n"></span></summary>
-      <div class="acc-b">${shown.map((e) => `<div class="part"><label><input type="checkbox" name="${name}" value="${e.k}" ${checked(e) ? 'checked' : ''}> ${esc(e.part)}${e.optional ? ' <small>(optional)</small>' : ''}${e.ok && e.late ? ` <small>· late, ${esc(fmtDate(e.at))}</small>` : ''}</label>
-        ${e.optional ? `<label class="na"><input type="checkbox" name="${name}-na" value="${e.k}" ${naChecked(e) ? 'checked' : ''}> N/A</label>` : ''}</div>`).join('')}
-        <div class="btn-row"><button type="button" class="btn sm" data-acc-all>Tick all</button></div></div></details>`;
+      <div class="acc-b">${shown.map((e) => `<div class="part"><label><input type="checkbox" name="${name}" value="${e.k}" ${e.optional ? 'data-opt="1"' : ''} ${checked(e) ? 'checked' : ''}> ${esc(e.part)}${e.optional ? ' <small>(optional – tick only if attached)</small>' : ''}${e.ok && e.late ? ` <small>· late, ${esc(fmtDate(e.at))}</small>` : ''}${e.na ? ' <small>(N/A)</small>' : ''}</label></div>`).join('')}
+        <div class="btn-row"><button type="button" class="btn sm" data-acc-all>Tick all required</button></div></div></details>`;
   }).join('');
 }
 // Keeps each accordion's count up to date; base = parts already submitted before (Late Docs).
 function wireAccordions(bg, name, onChange, base = () => 0) {
+  // The count is of required parts only (e.g. 3 of 3); optional parts ticked show as "+1 attached".
   const upd = () => $$('details.acc', bg).forEach((d) => {
-    const xs = $$(`input[name=${name}]`, d), n = $('.acc-n', d);
-    const t = xs.filter((x) => x.checked || ($(`input[name=${name}-na][value="${x.value}"]`, d) || {}).checked).length;
-    const have = base(d) + t, of = base(d) + xs.length;
-    n.textContent = `${have} of ${of}`; n.className = 'acc-n ' + (have === of ? 'ok' : have ? 'half' : 'none');
+    const req = $$(`input[name=${name}]:not([data-opt])`, d), opt = $$(`input[name=${name}][data-opt]`, d).filter((x) => x.checked).length, n = $('.acc-n', d);
+    const have = base(d) + req.filter((x) => x.checked).length, of = base(d) + req.length;
+    n.textContent = `${have} of ${of}${opt ? ` · +${opt} optional` : ''}`; n.className = 'acc-n ' + (have === of ? 'ok' : have ? 'half' : 'none');
   });
   $$('details.acc', bg).forEach((d) => {
-    // Submitted and N/A exclude each other.
-    $$(`input[name=${name}]`, d).forEach((x) => { x.addEventListener('change', () => { const na = $(`input[name=${name}-na][value="${x.value}"]`, d); if (x.checked && na) na.checked = false; upd(); if (onChange) onChange(); }); });
-    $$(`input[name=${name}-na]`, d).forEach((x) => { x.addEventListener('change', () => { if (x.checked) $(`input[name=${name}][value="${x.value}"]`, d).checked = false; upd(); if (onChange) onChange(); }); });
-    // Tick all: every part not marked N/A.
-    $('[data-acc-all]', d).onclick = () => { $$(`input[name=${name}]`, d).forEach((x) => { const na = $(`input[name=${name}-na][value="${x.value}"]`, d); if (!na || !na.checked) x.checked = true; }); upd(); if (onChange) onChange(); };
+    $$(`input[name=${name}]`, d).forEach((x) => { x.addEventListener('change', () => { upd(); if (onChange) onChange(); }); });
+    // Tick all required: the required parts only; optional ones are ticked one by one when attached.
+    $('[data-acc-all]', d).onclick = () => { $$(`input[name=${name}]:not([data-opt])`, d).forEach((x) => { x.checked = true; }); upd(); if (onChange) onChange(); };
   });
   upd();
   return upd;
@@ -209,7 +211,7 @@ export function checklistHtml(i) {
       ${t.none.length ? `<span class="legend">Not submitted · ${t.none.length}</span><ul class="rcv-ck">${t.none.map(([l]) => `<li class="miss">${esc(l)}</li>`).join('')}</ul>` : ''}
       ${other.length ? `<ul class="rcv-ck">${other.map((c) => `<li class="${c.ok ? 'ok' : 'miss'}">${esc(c.item)}</li>`).join('')}</ul>` : ''}
       ${!t.part.length && !t.none.length && !other.some((c) => !c.ok) ? '<p class="ok-t">Nothing missing.</p>' : ''}
-      <details><summary>Show every ${esc((i.lineLabel || 'account').toLowerCase())}</summary><ul class="rcv-ck">${t.rows.map(([l, es]) => `<li class="${es.every(isIn) ? 'ok' : 'miss'}">${esc(l)}<br><small>${es.map((e) => (e.ok ? '✓ ' : e.na ? '– ' : '✗ ') + esc(e.part) + (e.na ? ' N/A' : '') + (e.late ? ' (' + esc(fmtDate(e.at)) + ')' : '')).join(' · ')}</small></li>`).join('')}</ul></details>`;
+      <details><summary>Show every ${esc((i.lineLabel || 'account').toLowerCase())}</summary><ul class="rcv-ck">${t.rows.map(([l, es]) => `<li class="${es.every(isIn) ? 'ok' : 'miss'}">${esc(l)}<br><small>${es.map((e) => (e.ok ? '✓ ' : e.na ? '– ' : e.optional ? '· ' : '✗ ') + esc(e.part) + (e.na ? ' N/A' : !e.ok && e.optional ? ' (none)' : '') + (e.late ? ' (' + esc(fmtDate(e.at)) + ')' : '')).join(' · ')}</small></li>`).join('')}</ul></details>`;
   }
   const line = (c) => `<li class="${c.ok ? 'ok' : 'miss'}">${esc(c.item)}${c.late ? ` <small>· late, ${esc(fmtDate(c.at))}</small>` : ''}</li>`;
   if (ck.length <= LONG) return `<ul class="rcv-ck">${ck.map(line).join('')}</ul>`;
@@ -431,7 +433,7 @@ async function receiveForm(refs, rms, preset = null) {
             This transmittal gets its <b>own new tracking number</b>. Only what is still missing is listed.`;
         }
         box.hidden = !ex;
-        const prev = new Set(ex ? ex.checklist.filter(isIn).map((c) => c.item) : []);
+        const prev = new Set(ex ? ex.checklist.filter(present).map((c) => c.item) : []);
         const ents = entriesFor(r, o), items = ents.map((e) => e.item);
         if (ex && ex.done) { $('#f-list', bg).innerHTML = '<p class="ok-t">Everything for this period is already in. Nothing to receive.</p>'; dueHint(); state(); decState(); return; }
         if (isGrouped(ents)) return groupedList(r, o, ents, prev);
@@ -453,7 +455,7 @@ async function receiveForm(refs, rms, preset = null) {
       const groupedList = (r, o, ents, prev) => {
         // After earlier transmittals: accounts already complete are left out; the others show only their missing parts.
         const view = ents.map((e) => ({ ...e, ok: prev.has(e.item), na: false }));
-        const lines = linesOf(view).filter(([, es]) => !es.every((e) => e.ok)).map(([l]) => l), lbl = (r.lineLabel || 'Line').toLowerCase(), many = lines.length > 8;
+        const lines = linesOf(view).filter(([, es]) => es.some((e) => !e.optional && !e.ok)).map(([l]) => l), lbl = (r.lineLabel || 'Line').toLowerCase(), many = lines.length > 8;
         const other = view.map((e, k) => ({ ...e, k })).filter((e) => !(e.line && e.part) && !e.ok);
         $('#f-list', bg).innerHTML = `<small>Each ${esc(lbl)} includes: ${esc(r.checklist.join(', '))}</small>
           <span class="legend">1. Select the ${esc(lbl)}s that came in${ex ? ` (${lines.length} still incomplete)` : ''}</span>
@@ -469,7 +471,7 @@ async function receiveForm(refs, rms, preset = null) {
           accs.forEach((d) => { const show = on.has(d.dataset.line); if (!show) { $$('input[name=ck], input[name=ck-na]', d).forEach((x) => { x.checked = false; }); d.open = false; } d.hidden = !show; });
           $('#f-acc-none', bg).hidden = on.size > 0; updAcc(); state();
         };
-        const updAcc = wireAccordions(bg, 'ck', () => state(), (d) => view.filter((c) => c.line === d.dataset.line && c.ok).length);
+        const updAcc = wireAccordions(bg, 'ck', () => state(), (d) => view.filter((c) => c.line === d.dataset.line && c.ok && !c.optional).length);
         $$('input[name=acct]', bg).forEach((x) => { x.onchange = () => { pick(); const d = accs.find((a) => a.dataset.line === lines[+x.value]); if (x.checked && d) d.open = true; }; });
         $('#f-sel-all', bg).onclick = () => { $$('input[name=acct]', bg).forEach((x) => { if (!x.closest('label').hidden) x.checked = true; }); pick(); };
         $('#f-sel-none', bg).onclick = () => { $$('input[name=acct]', bg).forEach((x) => { x.checked = false; }); pick(); };
@@ -483,7 +485,7 @@ async function receiveForm(refs, rms, preset = null) {
       const state = () => {
         if ($('#f-acc', bg)) {
           const accs = $$('details.acc', bg), sel = accs.filter((d) => !d.hidden);
-          const full = sel.filter((d) => $$('input[name=ck]', d).every((x) => x.checked || ($(`input[name=ck-na][value="${x.value}"]`, d) || {}).checked)).length;
+          const full = sel.filter((d) => $$('input[name=ck]:not([data-opt])', d).every((x) => x.checked)).length;
           const empty = sel.filter((d) => !$$('input[name=ck]', d).some((x) => x.checked)).length;
           const before = ex ? lineTally(ex.checklist).done.length : 0, total = before + accs.length;
           $('#f-state', bg).innerHTML = `<b class="${before + full === total ? 'ok-t' : 'warn-t'}">${before + full} of ${total} complete</b>${ex ? ` (${before} before + ${full} now)` : ''} · ${sel.length} selected`
@@ -714,7 +716,7 @@ async function addLate(refs, rms, id) {
         ${many ? '<div class="btn-row"><button type="button" class="btn sm" id="l-all">Tick all shown</button></div>' : ''}</div>`; })(),
     onOpen: (bg) => {
       if ($('#l-find', bg)) $('#l-find', bg).oninput = () => { const v = $('#l-find', bg).value.trim().toLowerCase(); $$('.rcv-items label[data-t], details.acc', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
-      if ($('details.acc', bg)) wireAccordions(bg, 'late', null, (d) => i.checklist.filter((c) => c.line === d.dataset.line && c.ok).length);
+      if ($('details.acc', bg)) wireAccordions(bg, 'late', null, (d) => i.checklist.filter((c) => c.line === d.dataset.line && present(c) && !c.optional).length);
       if ($('#l-all', bg)) $('#l-all', bg).onclick = () => { $$('.rcv-items label', bg).forEach((l) => { if (!l.hidden) $('input', l).checked = true; }); };
     },
     buttons: [{ label: 'Cancel', value: null }, { label: 'Save', cls: 'primary', value: 'save', check: (bg) => {
@@ -850,11 +852,6 @@ async function correctItem(refs, rms, id) {
           else if (!on.has(k) && c.ok) { removed.push(c.item); const { at: _a, late: _l, by: _b, byName: _bn, encodedAt: _e, ...keep } = c; x = { ...keep, ok: false, at: '' }; }
           // First-submission documents follow a corrected date received.
           else if (c.ok && !c.late) x = { ...c, at: recAt };
-          if (c.optional) {
-            const na = naOn.has(k) && !on.has(k);
-            if (na && !c.na) { naAdd.push(c.item); x = { ...x, na: true }; }
-            if (!na && c.na) { naOff.push(c.item); const { na: _n, naAt: _na, naBy: _nb, ...keep } = x; x = keep; }
-          }
           return x;
         });
         const nm = (l) => l.length > 5 ? l.slice(0, 5).join(', ') + ` and ${l.length - 5} more` : l.join(', ');
@@ -920,7 +917,7 @@ export function printSlip(refs, rms, i) {
       // shows the accounts not yet submitted at all.)
       const mine = linesOf(i.checklist).filter(([, es]) => es.some((e) => e.ok || e.na)).map(([l]) => l), lbl = ((i.lineLabel || 'account') + (mine.length === 1 ? '' : 's')).toLowerCase();
       const lacks = (l) => agg.checklist.filter((c) => c.line === l && !isIn(c)).map((c) => c.part);
-      return `<div class="sec">SUBMITTED · ${mine.length} ${esc(lbl)}</div><ul class="${mine.length > 14 ? 'cols' : ''}">${mine.map((l) => { const m = lacks(l); return `<li class="${m.length ? 'miss' : 'ok'}">${esc(l)}${m.length ? ` — missing ${esc(m.join(', '))}` : ''}</li>`; }).join('')}</ul>`; })()
+      return `<div class="sec">SUBMITTED · ${mine.length} ${esc(lbl)}</div><ul class="${mine.length > 14 ? 'cols' : ''}">${mine.map((l) => { const m = lacks(l), a = attached(i, l); return `<li class="${m.length ? 'miss' : 'ok'}">${esc(l)}${m.length ? ` — missing ${esc(m.join(', '))}` : ''}${a.length ? ` (+ ${esc(a.join(', '))})` : ''}</li>`; }).join('')}</ul>`; })()
       : `<div class="sec">SUBMITTED</div><ul>${okList.map((c) => `<li class="ok">${esc(c.item)}</li>`).join('')}</ul>
       <div class="sec">MISSING</div><ul>${aggMiss.length ? aggMiss.map((c) => `<li class="miss">${esc(c.item)}</li>`).join('') : '<li>None</li>'}</ul>`}
       ${ver ? `<div class="note">Received subject to verification by the Auditor.${aggMiss.length ? ' Please submit the missing documents.' : ''}</div>`
