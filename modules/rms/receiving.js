@@ -29,7 +29,7 @@ export function unpackItem(d) {
   if (!d || !Array.isArray(d.checklist)) return d;
   return { ...d, checklist: d.checklist.map((c) => (c.item || !(c.line && c.part) ? c : { ...c, item: `${c.line} · ${c.part}` })) };
 }
-const saveItem = (id, data, who, opts) => store.save('rms_items', id, packItem(data), who, opts);
+export const saveItem = (id, data, who, opts) => store.save('rms_items', id, packItem(data), who, opts);
 
 // Adds a batch that came in (ticked documents, N/A parts) to a record, with its date received. A batch dated earlier than
 // the record's first submission (back-encoding out of order) becomes the 1st submission; the earlier-entered batch then
@@ -123,7 +123,7 @@ function trackingNo(rms, office, reportCode, year) {
 export const numberOf = (i) => i.trackingNo || i.pendingCode || '';
 
 export function statusText(i) {
-  if (i.kind === 'comm') return 'Received';
+  if (i.kind === 'comm' || i.kind === 'psao-in') return 'Received';
   if (isVerify(i)) return 'For Verification';
   if (i.status === 'rejected') return 'Rejected';
   if (isAccepted(i)) return 'Accepted';
@@ -188,9 +188,9 @@ function wireAccordions(bg, name, onChange, base = () => 0) {
 }
 const LONG = 12;
 // Date and time for an <input type="datetime-local">, in this computer's time.
-const localInput = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
+export const localInput = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 16); };
 // Reading the date field: an ISO date, or an error message.
-function readWhen(v, now = new Date()) {
+export function readWhen(v, now = new Date()) {
   const d = new Date(v);
   if (!v || isNaN(d)) return { err: 'Enter the date received.' };
   if (d - now > 5 * 60000) return { err: 'The date received cannot be in the future.' };
@@ -338,7 +338,11 @@ export function wireReceiving(refs, rms, q, rerender) {
 }
 
 /* ---------- receive form ---------- */
+// A team's report received at the PSAO (by the SA or OSA Staff): it counts for the office as usual and is also listed in the
+// PSAO Incoming book, routed SA → ATL → member.
+export const receiveAtPsao = (refs, rms) => receiveForm(refs, rms, { atPsao: true });
 async function receiveForm(refs, rms, preset = null) {
+  const atPsao = !!(preset && preset.atPsao);
   const scopes = scopesFor(refs);
   const offs = visibleOffices(refs, rms, scopes.map((s) => s.id));
   const label = (s) => s.data.kind === 'province' ? 'Province of Quirino' : s.data.name;
@@ -347,11 +351,11 @@ async function receiveForm(refs, rms, preset = null) {
   const groupName = (id) => (rms.groups || []).find((x) => x.id === id)?.name || '';
   let out = null, ex = null;   // ex: the record already received for the chosen office, report and period
   const res = await modal({
-    title: 'Receive Documents', wide: true,
+    title: atPsao ? 'Receive at the PSAO · Report for a Team Office' : 'Receive Documents', wide: true,
     body: `<div class="rcv-pdf"><label class="btn sm" for="f-pdf">Upload PDF to fill in</label><input type="file" id="f-pdf" accept="application/pdf,.pdf" hidden>
         <span class="hint" id="f-pdf-hint">Reads the office, report and period, or a letter's subject, sender and signatory. The PDF itself is not saved.</span>
         <button type="button" class="btn sm primary" id="f-ocr" hidden>Read scanned pages</button></div>
-      <div class="rcv-type"><label><input type="radio" name="kind" value="report" checked> Report Submission</label><label><input type="radio" name="kind" value="comm"> Communication</label></div>
+      <div class="rcv-type" ${atPsao ? 'hidden' : ''}><label><input type="radio" name="kind" value="report" checked> Report Submission</label><label><input type="radio" name="kind" value="comm"> Communication</label></div>
       <div class="two"><div class="field"><label for="f-mun">Municipality</label><select class="input" id="f-mun">${scopes.map((s) => `<option value="${s.id}">${esc(label(s))}</option>`).join('')}</select></div>
         <div class="field"><label for="f-off">Submitting Office</label><select class="input" id="f-off"></select><span class="hint" id="f-off-hint"></span></div></div>
       <div id="rep-part">
@@ -532,6 +536,7 @@ async function receiveForm(refs, rms, preset = null) {
             if (page) hint.textContent = `Reading scanned page ${page} of ${of}…`; else if (pr) hint.textContent = hint.textContent.replace(/ \d+%$/, '') + ` ${Math.round(pr * 100)}%`; } });
           if (got.scanned && !allowOcr) { hint.textContent = 'This PDF is a scan (no text inside). The app can read the scanned pages; results may need checking.'; ocrBtn.hidden = false; return; }
           const d = parseDetails(got.lines, { reports: rms.reports.filter((r) => r.active !== false), offices: offs });
+          if (atPsao && d.subject) { hint.textContent = 'This looks like a letter, not a report. Use + Receive Document in the PSAO book for letters.'; return; }
           if (!d.text.trim()) { hint.textContent = 'No readable text was found. Please type the details.'; return; }
           const filled = [];
           const isReport = !!d.report && !d.subject;
@@ -560,7 +565,7 @@ async function receiveForm(refs, rms, preset = null) {
       $('#f-ocr', bg).onclick = () => { if (pdfFile) applyPdf(true); };
       fillOffices(); kindState();
       // Receive Next Transmittal: office, report and period filled in.
-      if (preset) {
+      if (preset && preset.officeId) {
         const o = offs.find((x) => x.id === preset.officeId);
         if (o) { $('#f-mun', bg).value = o.munId; fillOffices(); $('#f-off', bg).value = o.id; fillReports(); $('#f-rep', bg).value = preset.reportId; fillPeriods();
           if (![...$('#f-per', bg).options].some((x) => x.value === preset.period)) $('#f-per', bg).insertAdjacentHTML('afterbegin', `<option value="${esc(preset.period)}">${esc(periodLabel(preset.period))}</option>`);
@@ -578,7 +583,8 @@ async function receiveForm(refs, rms, preset = null) {
       if (when.err) { toast(when.err, 'bad'); return false; }
       const encodedAt = new Date().toISOString();
       const base = { kind, receivedAt: when.iso, encodedAt, receivedBy: by(refs), receivedByName: myName(refs), submittedBy, submittedDesignation: designation,
-        remarks: $('#f-rem', bg).value.trim(), officeId: o ? o.id : '', officeCode: o ? o.code : '', teamId: o ? o.teamId : (refs.me?.data.teamIds || [])[0] || '', munId: o ? o.munId : '' };
+        remarks: $('#f-rem', bg).value.trim(), officeId: o ? o.id : '', officeCode: o ? o.code : '', teamId: o ? o.teamId : (refs.me?.data.teamIds || [])[0] || '', munId: o ? o.munId : '',
+        ...(atPsao ? { atPsao: true, route: { teams: [] } } : {}) };
       if (kind === 'report') {
         const r = rms.reports.find((x) => x.id === $('#f-rep', bg).value);
         if (!r) { toast('This office has no report ticked. Tick its reports in Office Setup first.', 'bad'); return false; }
@@ -653,7 +659,7 @@ async function receiveForm(refs, rms, preset = null) {
     buttons: [{ label: 'Done', value: null }, { label: 'Receive Another', value: 'again' }, ...(confirmed ? [{ label: 'Print Slip', cls: 'primary', value: 'slip' }] : [])]
   });
   if (again === 'slip') printSlip(refs, rms, saved);
-  if (again === 'again') receiveForm(refs, { ...rms, items: [...rms.items, saved] });
+  if (again === 'again') receiveForm(refs, { ...rms, items: [...rms.items, saved] }, atPsao ? { atPsao: true } : null);
 }
 
 /* ---------- auditor's decision ---------- */
@@ -886,7 +892,7 @@ async function correctItem(refs, rms, id) {
 export function printSlip(refs, rms, i) {
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   const team = refs.team[i.teamId]?.data;
-  const teamLine = team ? (team.officeCode ? 'Audit Team ' + team.officeCode : team.name) + ' · Province of Quirino' : 'Province of Quirino';
+  const teamLine = i.kind === 'psao-in' ? 'PSAO · Province of Quirino' : team ? (team.officeCode ? 'Audit Team ' + team.officeCode : team.name) + ' · Province of Quirino' : 'Province of Quirino';
   const rep = rms.reports.find((r) => r.id === i.reportId);
   const okList = (i.checklist || []).filter((c) => c.ok);
   // What the whole period still lacks, over all its transmittals (this one included even if not yet in the list).
@@ -909,7 +915,7 @@ export function printSlip(refs, rms, i) {
     <div class="title">ACKNOWLEDGMENT RECEIPT</div>
     <div class="no"><small>${pend ? 'PENDING CODE' : 'TRACKING NUMBER'}</small><b>${esc(numberOf(i))}</b></div>
     <div class="kv"><span>${i.fromOutside ? 'From' : 'Office'}</span><span><b>${esc(i.fromOutside || off?.label || '')}</b></span>
-      ${i.kind === 'comm' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + periodLabel(i.period))}</span>`}
+      ${i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + periodLabel(i.period))}</span>`}
       <span>Received</span><span>${esc(new Date(i.receivedAt).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>
       <span>Received from</span><span>${esc(i.submittedBy)}${i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''}</span></div>
     ${i.kind === 'report' ? `${isGrouped(i.checklist) ? (() => {

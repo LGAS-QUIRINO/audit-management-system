@@ -5,6 +5,7 @@ import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
+import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
 import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn } from './receiving.js';
 
 // Load this module's look once.
@@ -46,13 +47,17 @@ function canEditMun(refs, munTeamId, munId) {
 
 /* ---------- data ---------- */
 async function loadRms() {
-  const [reports, offices, items, settings, groups] = await Promise.all([store.list('rms_reports'), store.list('rms_offices'), store.list('rms_items'), store.get('rms_settings', 'office'), store.get('rms_settings', 'groups')]);
+  const [reports, offices, items, settings, groups, psaoSet] = await Promise.all([store.list('rms_reports'), store.list('rms_offices'), store.list('rms_items'), store.get('rms_settings', 'office'), store.get('rms_settings', 'groups'), store.get('rms_settings', 'psao')]);
+  const isPsao = (i) => i.data && (i.data.kind === 'psao-in' || i.data.kind === 'psao-out');
   const now = new Date();
   return { reports: reports.map((r) => ({ id: r.id, ...r.data })), offices: offices.map((o) => ({ id: o.id, ...o.data })),
     // _new: received on this computer but not yet sent to the AMS database (its number is not yet confirmed).
     // Received items (Incoming) and sent items (Outgoing, kind 'out') are kept in the same list in the database.
-    items: items.filter((i) => i.data && i.data.kind !== 'out').map((i) => ({ id: i.id, ...unpackItem(i.data), ...(i.pending && !i.version ? { _new: true } : {}) })),
+    items: items.filter((i) => i.data && i.data.kind !== 'out' && !isPsao(i)).map((i) => ({ id: i.id, ...unpackItem(i.data), ...(i.pending && !i.version ? { _new: true } : {}) })),
     outs: items.filter((i) => i.data && i.data.kind === 'out').map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
+    // The PSAO's own books (PSAO Incoming 'psao-in', PSAO Outgoing 'psao-out') and its document types.
+    psao: items.filter(isPsao).map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
+    psaoTypes: (psaoSet && psaoSet.data && psaoSet.data.types) || [],
     // Report groups made by the team (Report Library), in their set order.
     groups: (groups && groups.data && groups.data.list) || [],
     startPeriod: (settings && settings.data && settings.data.startPeriod) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
@@ -156,7 +161,16 @@ function overdueAll(refs, rms, year) {
 }
 
 /* ---------- page frame ---------- */
-function navItems(refs, overdueN, pendingN, awaitN) {
+function navItems(refs, overdueN, pendingN, awaitN, rms) {
+  const psao = canPsao(refs) ? [{ section: true, label: 'PSAO' },
+    { key: 'psao-in', label: 'Incoming', icon: 'inbox', href: '#/rms/psao-in', count: routingCount(refs, rms) },
+    { key: 'psao-out', label: 'Outgoing', icon: 'book', href: '#/rms/psao-out', count: psaoAwaiting(rms) }] : [];
+  if (psaoOnly(refs)) return [
+    { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
+    { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
+    ...psao,
+    { section: true, label: 'SETUP' },
+    { key: 'library', label: 'Report Library', icon: 'library', href: '#/rms/setup/library' }];
   if (jobOrderOnly(refs)) return [
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving' },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
@@ -165,10 +179,12 @@ function navItems(refs, overdueN, pendingN, awaitN) {
   return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
     { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
+    ...(psao.length ? [{ section: true, label: 'TEAM BOOKS' }] : []),
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
     { key: 'records', label: 'Records & Storage', icon: 'box', soon: true },
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true },
+    ...psao,
     { section: true, label: 'SETUP' },
     { key: 'library', label: 'Report Library', icon: 'library', href: '#/rms/setup/library' },
     { key: 'offices', label: 'Office Setup', icon: 'building', href: '#/rms/setup/offices' }];
@@ -183,25 +199,31 @@ export async function render(ctx) {
   if (view === 'setup') view = parts[1] === 'offices' ? 'offices' : 'library';
   if (view === 'incoming') view = 'receiving';
   if (jo && !['receiving', 'outgoing'].includes(view)) view = 'receiving';
+  if (['psao-in', 'psao-out'].includes(view) && !canPsao(refs)) view = 'overview';
+  if (psaoOnly(refs) && ['receiving', 'outgoing', 'offices'].includes(view)) view = view === 'outgoing' ? 'psao-out' : view === 'offices' ? 'library' : 'psao-in';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
-  const pendingN = jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length;
-  const body = view === 'receiving' ? receivingHtml(refs, rms, q)
+  const pendingN = (jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length) + waitingForMe(refs, rms).length;
+  const body = view === 'receiving' ? receivingHtml(refs, rms, q).replace('id="rcv-new">+ Receive Documents</button></div>', (m) => m + fromPsaoHtml(refs, rms))
     : view === 'outgoing' ? outgoingHtml(refs, rms, q)
+    : view === 'psao-in' ? psaoInHtml(refs, rms, q)
+    : view === 'psao-out' ? outgoingHtml(refs, rms, q, true)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
     : overviewHtml(refs, rms, overdue);
   const me = refs.me ? refs.me.data : { name: ctx.session.name || ctx.session.email };
   const roleText = [refs.me?.data.position, roleLine(refs)].filter(Boolean).join(' · ');
-  app.innerHTML = moduleFrame({ title: 'Records<br>Management', items: navItems(refs, overdue.length, pendingN, awaitingCount(refs, rms)), active: view, crumb: crumbs[view] || 'Overview', me, roleText, body });
+  app.innerHTML = moduleFrame({ title: 'Records<br>Management', items: navItems(refs, overdue.length, pendingN, awaitingCount(refs, rms), rms), active: view, crumb: crumbs[view] || 'Overview', me, roleText, body });
   $$('[data-soon]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); toast(`${a.dataset.soon} comes next. It is not built yet.`); }; });
   if (view === 'offices') wireOffices(refs, rms, q);
   else if (view === 'library') wireLibrary(refs, rms);
   else if (view === 'monitor') wireMonitor(refs, rms, q);
-  else if (view === 'receiving') wireReceiving(refs, rms, q, ctx.rerender);
+  else if (view === 'receiving') { wireReceiving(refs, rms, q, ctx.rerender); wireRows(refs, rms); }
   else if (view === 'outgoing') wireOutgoing(refs, rms, q);
+  else if (view === 'psao-in') wirePsaoIn(refs, rms, q);
+  else if (view === 'psao-out') wireOutgoing(refs, rms, q, true);
 }
 
 /* ================= Overview ================= */
@@ -233,13 +255,14 @@ function overviewHtml(refs, rms, overdue) {
   const noCode = scopes.reduce((n, s) => n + auditeesOf(refs, rms, s.id).filter((a) => !a.main || !a.main.code).length, 0);
   const cols = 'grid-template-columns:minmax(190px,1.2fr) minmax(160px,1fr) 120px 110px';
   return `<div class="hello"><div><h1>${greet()}${nice ? ', ' + esc(nice) : ''}</h1><p>${esc(teamNames || 'Records Management')} · ${MONTHS_LONG[now.getMonth()]} ${now.getFullYear()} · ${offs.length} submitting office${offs.length === 1 ? '' : 's'}</p></div>
-      <div class="btn-row"><a class="btn" href="#/rms/monitor">Open Submission Monitor</a><a class="btn primary" href="#/rms/receiving?new=1">+ Receive Documents</a></div></div>
-    <div class="stats">
+      <div class="btn-row"><a class="btn" href="#/rms/monitor">Open Submission Monitor</a><a class="btn primary" href="${psaoOnly(refs) ? '#/rms/psao-in?new=1' : '#/rms/receiving?new=1'}">+ Receive Documents</a></div></div>
+    ${canPsao(refs) ? psaoStats(refs, rms, overdue) : ''}
+    ${psaoOnly(refs) ? '' : `<div class="stats">
       <div class="stat"><span>Received This Month</span><b>${thisMonth}</b><small>tracking numbers issued</small></div>
       <a class="stat" href="#/rms/receiving"><span>For Verification</span><b class="${verify.length ? 'warn' : ''}">${verify.length}</b><small>${lacking.length} period${lacking.length === 1 ? '' : 's'} still missing documents</small></a>
       <a class="stat" href="#/rms/monitor?show=overdue"><span>Overdue</span><b class="${overdue.length ? 'bad' : ''}">${overdue.length}</b><small>past due, not yet submitted</small></a>
       <div class="stat"><span>Borrowed Out</span><b class="dim">—</b><small>comes with the Borrow Log</small></div>
-    </div>
+    </div>`}
     <div class="mgrid">
       <section class="panel">
         <div class="panel-head"><h2>Recently Received</h2></div>
@@ -255,6 +278,19 @@ function overviewHtml(refs, rms, overdue) {
         ${!rms.reports.length ? `<a class="actrow" href="#/rms/setup/library"><b>The Report Library is empty.</b><small>The Admin or SA Staff add the reports first.</small></a>` : ''}
         ${!top.length && !incomplete.length && !noCode && rms.reports.length ? '<div class="empty"><b>All clear</b>Nothing needs attention right now.</div>' : ''}
       </section>
+    </div>`;
+}
+
+// SA, OSA Staff and Admin: the PSAO books and each team's overdue count.
+function psaoStats(refs, rms, overdue) {
+  const ym = new Date().toISOString().slice(0, 7);
+  const pin = psaoIn(rms), month = pin.filter((i) => String(i.receivedAt).slice(0, 7) === ym).length;
+  const routing = routingCount(refs, rms), wait = psaoAwaiting(rms);
+  return `<div class="stats">
+      <a class="stat" href="#/rms/psao-in"><span>PSAO Incoming This Month</span><b>${month}</b><small>${routing} still being routed</small></a>
+      <a class="stat" href="#/rms/psao-out?s=wait"><span>PSAO Outgoing Awaiting</span><b class="${wait ? 'warn' : ''}">${wait}</b><small>acknowledgment not yet back</small></a>
+      ${refs.teams.slice(0, 2).map((t) => { const n = overdue.filter((x) => x.o.teamId === t.id).length;
+        return `<a class="stat" href="#/rms/monitor?t=${encodeURIComponent(t.id)}&show=overdue"><span>Overdue · ${esc(t.data.name)}</span><b class="${n ? 'bad' : ''}">${n}</b><small>past due, not yet submitted</small></a>`; }).join('')}
     </div>`;
 }
 
@@ -301,7 +337,7 @@ function acctStatus(rms, office, r, p, line, now = new Date()) {
   return { s: now > due ? 'overdue' : 'notdue', due, recs: [], ents };
 }
 function acctHtml(refs, rms, q, ctx) {
-  const { scopes, scopeId, year, r, reports, label, qs } = ctx;
+  const { scopes, scopeId, year, r, reports, label, qs, teamSel } = ctx;
   const now = new Date();
   const per = reports.filter((x) => x.perOffice);
   const offs = visibleOffices(refs, rms, scopeId === 'all' ? scopes.map((s) => s.id) : [scopeId])
@@ -321,7 +357,7 @@ function acctHtml(refs, rms, q, ctx) {
           <td class="acct-n"><small>${okN} of ${dueN}</small></td></tr>`;
       }).join('');
   }).join('');
-  return `<div class="mon-filters">
+  return `<div class="mon-filters">${teamSel}
       <label>Municipality<select class="input" data-f="m"><option value="all">All my municipalities</option>${scopes.map((s) => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
       <label>Report<select class="input" data-f="r">${per.map((x) => `<option value="${x.id}" ${x.id === r.id ? 'selected' : ''}>${esc(x.code + ' · ' + x.name)}</option>`).join('')}</select></label>
       <label>Office<select class="input" data-f="o"><option value="all">All offices</option>${offs.map((o) => `<option value="${o.id}" ${o.id === oid ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>
@@ -336,7 +372,12 @@ function acctHtml(refs, rms, q, ctx) {
 }
 
 function monitorHtml(refs, rms, q) {
-  const scopes = scopesFor(refs);
+  // SA, OSA Staff and Admin see every team: a Team filter narrows the municipalities.
+  const allScopes = scopesFor(refs);
+  const multi = seesAllTeams(refs) && refs.teams.length > 1;
+  const tf = multi && refs.teams.some((t) => t.id === q.get('t')) ? q.get('t') : 'all';
+  const scopes = tf === 'all' ? allScopes : allScopes.filter((s) => s.data.teamId === tf);
+  const teamSel = multi ? `<label>Team<select class="input" data-f="t"><option value="all">All teams</option>${refs.teams.map((t) => `<option value="${t.id}" ${t.id === tf ? 'selected' : ''}>${esc(t.data.name)}</option>`).join('')}</select></label>` : '';
   if (!scopes.length) return `<div class="msg bad">No team is assigned to you yet. Ask the Admin to set your team in Users &amp; Roles.</div>`;
   const reports = byGroup(rms, rms.reports.filter((r) => r.active !== false && r.frequency !== 'As needed'));
   if (!reports.length) return `<div class="hello"><div><h1>Submission Monitor</h1><p>Which office submitted what, period by period.</p></div></div>
@@ -368,17 +409,17 @@ function monitorHtml(refs, rms, q) {
     const spans = []; columns.forEach((c) => { const n = groupName(rms, c.r) || 'No group'; const last = spans[spans.length - 1]; if (last && last.n === n) last.k++; else spans.push({ n, k: 1 }); });
     return `<tr class="grp"><th></th>${spans.map((x) => `<th colspan="${x.k}">${esc(x.n)}</th>`).join('')}</tr>`; })() : '';
   const tally = {}; grid.forEach((g) => g.cs.forEach((x) => { if (x.st) tally[x.st.s] = (tally[x.st.s] || 0) + 1; }));
-  const qs = (patch) => { const o = { m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...(q.get('o') ? { o: q.get('o') } : {}), ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
+  const qs = (patch) => { const o = { ...(tf !== 'all' ? { t: tf } : {}), m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...(q.get('o') ? { o: q.get('o') } : {}), ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
   const years = [now.getFullYear(), now.getFullYear() - 1];
   if (mode === 'acct') return `<div class="hello"><div><h1>Submission Monitor</h1><p>Per bank account: which months came in. Click a cell to see its details.</p></div>
       <button class="btn" type="button" id="mon-print">Print</button></div>
-    <section class="panel">${acctHtml(refs, rms, q, { scopes, scopeId, year, r, reports, label, qs })}</section>
+    <section class="panel">${acctHtml(refs, rms, q, { scopes, scopeId, year, r, reports, label, qs, teamSel })}</section>
     <section class="panel" id="cell-detail" hidden></section>`;
   const hasPer = reports.some((x) => x.perOffice);
   return `<div class="hello"><div><h1>Submission Monitor</h1><p>Which office submitted what, period by period. Click a cell to see its details.</p></div>
       <button class="btn" type="button" id="mon-print">Print</button></div>
     <section class="panel">
-      <div class="mon-filters">
+      <div class="mon-filters">${teamSel}
         <label>Municipality<select class="input" data-f="m"><option value="all">All my municipalities</option>${scopes.map((s) => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
         ${mode === 'month' ? `<label>Report<select class="input" data-f="r">${groupedOptions(rms, reports, rid)}</select></label>`
           : `<label>Month<select class="input" data-f="mo">${MONTHS_LONG.map((m, i) => `<option value="${i + 1}" ${i + 1 === month ? 'selected' : ''}>${m}</option>`).join('')}</select></label>`}
@@ -388,7 +429,7 @@ function monitorHtml(refs, rms, q) {
       </div>
       <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}</div>
       ${shown.length ? `<div class="mon-wrap"><table class="mon"><thead>${groupRow}<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr></thead><tbody>
-        ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small></th>${g.cs.map((x) => x.st
+        ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small>${multi && tf === 'all' ? `<small> · ${esc(refs.team[g.o.teamId]?.data.name || '')}</small>` : ''}</th>${g.cs.map((x) => x.st
           ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}${countOf(x)}</td>` : '<td class="c na"></td>').join('')}</tr>`).join('')}
         </tbody></table></div>`
         : `<div class="empty"><b>${rows.length ? 'Nothing to show for this filter' : 'No office submits this report yet'}</b>${rows.length ? 'Try Show: All offices.' : 'Tick the report for the offices in Office Setup.'}</div>`}

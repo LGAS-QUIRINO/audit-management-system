@@ -8,6 +8,7 @@ import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { DEMO } from '../../js/config.js';
 import { syncNow } from '../../js/sync.js';
 import { scopesFor, visibleOffices, fmtDate, hasRole } from './rms.js';
+import { psaoTypes, psaoIn } from './psao.js';
 
 const by = (refs) => refs.me?.data.email || '';
 const myName = (refs) => refs.me?.data.name || '';
@@ -30,16 +31,18 @@ const isAwaiting = (o) => !o.recipient;
 export const awaitingCount = (refs, rms) => rms.outs.filter((o) => sendTeams(refs).some((t) => t.id === o.teamId) && isAwaiting(o)).length;
 
 /* ================= Outgoing page ================= */
-export function outgoingHtml(refs, rms, q) {
-  const teams = sendTeams(refs);
-  if (!teams.length) return `<div class="msg bad">No team is assigned to you yet. Ask the Admin to set your team in Users &amp; Roles.</div>`;
+// psao: the PSAO's own book (PSAO-OUT-{TYPE}-2026-0001), for the SA and OSA Staff.
+export function outgoingHtml(refs, rms, q, psao = false) {
+  const teams = psao ? [] : sendTeams(refs);
+  if (!psao && !teams.length) return `<div class="msg bad">No team is assigned to you yet. Ask the Admin to set your team in Users &amp; Roles.</div>`;
   const tf = q.get('t') || 'all';
   const show = q.get('s') || 'all';
-  const list = rms.outs.filter((o) => teams.some((t) => t.id === o.teamId) && (tf === 'all' || o.teamId === tf))
+  const base = psao ? '#/rms/psao-out' : '#/rms/outgoing';
+  const list = (psao ? rms.psao.filter((o) => o.kind === 'psao-out') : rms.outs.filter((o) => teams.some((t) => t.id === o.teamId) && (tf === 'all' || o.teamId === tf)))
     .sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)) || String(b.trackingNo).localeCompare(String(a.trackingNo)));
   const waiting = list.filter(isAwaiting).length;
   const shown = list.filter((o) => show === 'all' || (show === 'wait' ? isAwaiting(o) : !isAwaiting(o)));
-  const qs = (patch) => '#/rms/outgoing?' + Object.entries({ t: tf, s: show, ...patch }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  const qs = (patch) => base + '?' + Object.entries({ t: tf, s: show, ...patch }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
   const cols = 'grid-template-columns:150px 100px minmax(160px,1fr) minmax(200px,1.3fr) 140px minmax(210px,1fr)';
   const row = (o) => {
     const find = [o.trackingNo, o.toName, o.officeCode && o.toCode, o.subject, o.docKind, o.related, o.sentByName, o.recipient && o.recipient.name, fmtDate(o.sentAt)].filter(Boolean).join(' ').toLowerCase();
@@ -52,7 +55,8 @@ export function outgoingHtml(refs, rms, q) {
         : `${pill('Awaiting acknowledgment', 'warn')}<br><button class="btn sm" data-ack="${o.id}" style="margin-top:6px">Record receipt</button>`}
         <button class="btn sm" data-oview="${o.id}" style="margin-top:6px">View</button></span></div>`;
   };
-  return `<div class="hello"><div><h1>Outgoing</h1><p>Everything the team sends out: demand letters, AOMs, replies, reports to the Region. Each gets its own outgoing number.</p></div>
+  return `<div class="hello"><div>${psao ? '<h1>Outgoing · PSAO</h1><p>What the PSAO sends out: reports to the Region, transmittals of the Annual Audit Reports, PSAO letters. Each type has its own outgoing number.</p>'
+      : '<h1>Outgoing</h1><p>Everything the team sends out: demand letters, AOMs, replies, reports to the Region. Each gets its own outgoing number.</p>'}</div>
       <button class="btn primary" type="button" id="out-new">+ Record Outgoing</button></div>
     <section class="panel">
       <div class="filters out-filters"><div class="seg"><a class="${show === 'all' ? 'on' : ''}" href="${qs({ s: 'all' })}">All · ${list.length}</a><a class="${show === 'wait' ? 'on' : ''}" href="${qs({ s: 'wait' })}">Awaiting acknowledgment · ${waiting}</a><a class="${show === 'done' ? 'on' : ''}" href="${qs({ s: 'done' })}">Received · ${list.length - waiting}</a></div>
@@ -65,33 +69,35 @@ export function outgoingHtml(refs, rms, q) {
     </section>`;
 }
 
-export function wireOutgoing(refs, rms, q) {
-  $('#out-new').onclick = () => recordOutgoing(refs, rms);
+export function wireOutgoing(refs, rms, q, psao = false) {
+  const nb = $('#out-new'); if (!nb) return;
+  nb.onclick = () => recordOutgoing(refs, rms, psao);
   const t = $('#out-team'); if (t) t.onchange = () => { location.hash = `#/rms/outgoing?t=${encodeURIComponent(t.value)}&s=${encodeURIComponent(q.get('s') || 'all')}`; };
   const f = $('#out-find'); if (f) f.oninput = () => { const v = f.value.trim().toLowerCase(); let n = 0;
     $$('#out-list .t-row').forEach((r) => { const hit = !v || v.split(/\s+/).every((w) => r.dataset.find.includes(w)); r.hidden = !hit; if (hit) n++; });
     const none = $('#out-none'); if (none) none.hidden = n > 0; };
   $$('[data-ack]').forEach((b) => { b.onclick = () => recordReceipt(refs, rms, b.dataset.ack); });
   $$('[data-oview]').forEach((b) => { b.onclick = () => viewOutgoing(refs, rms, b.dataset.oview); });
-  if (q.get('new') === '1') { history.replaceState(null, '', '#/rms/outgoing'); recordOutgoing(refs, rms); }
+  if (q.get('new') === '1') { history.replaceState(null, '', psao ? '#/rms/psao-out' : '#/rms/outgoing'); recordOutgoing(refs, rms, psao); }
 }
 
 /* ---------- Record Outgoing ---------- */
-async function recordOutgoing(refs, rms) {
-  const teams = sendTeams(refs);
+async function recordOutgoing(refs, rms, psao = false) {
+  const teams = psao ? [] : sendTeams(refs);
+  const types = psaoTypes(rms);
   const scopes = scopesFor(refs);
   const offs = visibleOffices(refs, rms, scopes.map((s) => s.id)).filter((o) => o.code);
   const label = (s) => s.data.kind === 'province' ? 'Province of Quirino' : s.data.name;
-  const incoming = [...new Set(rms.items.map((i) => i.trackingNo).filter(Boolean))].sort().reverse().slice(0, 300);
+  const incoming = [...new Set([...(psao ? psaoIn(rms) : []), ...rms.items].map((i) => i.trackingNo).filter(Boolean))].sort().reverse().slice(0, 300);
   let out = null;
   const res = await modal({
-    title: 'Record Outgoing', wide: true,
+    title: psao ? 'Record Outgoing · PSAO' : 'Record Outgoing', wide: true,
     body: `${teams.length > 1 ? `<div class="field" style="max-width:260px"><label for="o-team">For team</label><select class="input" id="o-team">${teams.map((t) => `<option value="${t.id}" ${(refs.me?.data.teamIds || [])[0] === t.id ? 'selected' : ''}>${esc(t.data.name)} · ${esc(teamCode(t))}-OUT</option>`).join('')}</select></div>` : ''}
       <div class="field"><span class="legend">To</span><div class="rcv-type"><label><input type="radio" name="to" value="office" checked> One of the offices</label><label><input type="radio" name="to" value="outside"> Outside (e.g. COA Regional Office II)</label></div></div>
       <div class="two" id="o-office-box"><div class="field"><label for="o-mun">Municipality</label><select class="input" id="o-mun">${scopes.map((s) => `<option value="${s.id}">${esc(label(s))}</option>`).join('')}</select></div>
         <div class="field"><label for="o-off">Office</label><select class="input" id="o-off"></select></div></div>
       <div class="field" id="o-outside-box" hidden><label for="o-to">To (name of office or person)</label><input class="input" id="o-to" placeholder="e.g. COA Regional Office II"></div>
-      <div class="two"><div class="field"><label for="o-kind">Kind</label><select class="input" id="o-kind">${KINDS.map((k) => `<option>${esc(k)}</option>`).join('')}</select></div>
+      <div class="two"><div class="field"><label for="o-kind">${psao ? 'Document type' : 'Kind'}</label><select class="input" id="o-kind">${psao ? types.map((t) => `<option value="${esc(t.code)}">${esc(t.code + ' · ' + t.name)}</option>`).join('') : KINDS.map((k) => `<option>${esc(k)}</option>`).join('')}</select></div>
         <div class="field"><span class="legend">Mode of sending</span><div class="rcv-type">${MODES.map((m, k) => `<label><input type="radio" name="mode" value="${esc(m)}" ${k ? '' : 'checked'}> ${esc(m)}</label>`).join('')}</div></div></div>
       <div class="field"><label for="o-subj">Subject / Description</label><input class="input" id="o-subj" placeholder="e.g. Demand letter – overdue August and September RCI"></div>
       <div class="two"><div class="field"><label for="o-rel">Related tracking no. (optional)</label><input class="input mono" id="o-rel" list="o-rel-list" placeholder="e.g. MAD-BAL-2026-0007"><datalist id="o-rel-list">${incoming.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
@@ -106,7 +112,7 @@ async function recordOutgoing(refs, rms) {
       $$('input[name=to]', bg).forEach((x) => { x.onchange = () => { const o = $('input[name=to]:checked', bg).value === 'outside'; $('#o-office-box', bg).hidden = o; $('#o-outside-box', bg).hidden = !o; }; });
     },
     buttons: [{ label: 'Cancel', value: null }, { label: 'Save and Get Number', cls: 'primary', value: 'save', check: (bg) => {
-      const team = teams.length > 1 ? teams.find((t) => t.id === $('#o-team', bg).value) : teams[0];
+      const team = psao ? null : teams.length > 1 ? teams.find((t) => t.id === $('#o-team', bg).value) : teams[0];
       const outside = $('input[name=to]:checked', bg).value === 'outside';
       const o = outside ? null : offs.find((x) => x.id === $('#o-off', bg).value);
       const toName = outside ? $('#o-to', bg).value.trim() : (o ? o.label : '');
@@ -115,17 +121,19 @@ async function recordOutgoing(refs, rms) {
       const day = $('#o-date', bg).value; if (!day) { toast('Enter the date sent.', 'bad'); return false; }
       const now = new Date(), sent = new Date(day + 'T' + now.toTimeString().slice(0, 8));
       if (sent - now > 5 * 60000) { toast('The date sent cannot be in the future.', 'bad'); return false; }
-      const code = teamCode(team) + '-OUT', year = sent.getFullYear(), key = 'out-' + team.id;
-      const n = Math.max(0, ...rms.outs.filter((x) => x.seriesKey === key && x.trackingYear === year).map((x) => x.series || 0)) + 1;
-      out = { kind: 'out', teamId: team.id, seriesKey: key, officeCode: code, trackingYear: year, series: n, trackingNo: `${code}-${year}-${String(n).padStart(4, '0')}`,
+      const t = psao ? types.find((x) => x.code === $('#o-kind', bg).value) : null;
+      const code = psao ? 'PSAO-OUT' : teamCode(team) + '-OUT', year = sent.getFullYear(), key = psao ? 'psao-out-' + t.code : 'out-' + team.id;
+      const n = Math.max(0, ...(psao ? rms.psao : rms.outs).filter((x) => x.seriesKey === key && x.trackingYear === year).map((x) => x.series || 0)) + 1;
+      out = { kind: psao ? 'psao-out' : 'out', teamId: psao ? '' : team.id, seriesKey: key, officeCode: code, trackingYear: year, series: n,
+        trackingNo: psao ? `${code}-${t.code}-${year}-${String(n).padStart(4, '0')}` : `${code}-${year}-${String(n).padStart(4, '0')}`, ...(psao ? { reportCode: t.code, docType: t.code } : {}),
         toKind: outside ? 'outside' : 'office', officeId: o ? o.id : '', toCode: o ? o.code : '', munId: o ? o.munId : '', toName,
-        docKind: $('#o-kind', bg).value, mode: $('input[name=mode]:checked', bg).value, subject, related: $('#o-rel', bg).value.trim().toUpperCase(),
+        docKind: psao ? t.name : $('#o-kind', bg).value, mode: $('input[name=mode]:checked', bg).value, subject, related: $('#o-rel', bg).value.trim().toUpperCase(),
         remarks: $('#o-rem', bg).value.trim(), sentAt: sent.toISOString(), encodedAt: now.toISOString(), sentBy: by(refs), sentByName: myName(refs), status: 'sent', recipient: null };
       return true;
     } }]
   });
   if (res !== 'save') return;
-  const id = newId('out');
+  const id = newId(psao ? 'psao' : 'out');
   await store.save('rms_items', id, out, by(refs));
   let saved = { id, ...out }, confirmed = DEMO;
   // Connected: the AMS database gives the number, so two people sending at once never share a number.
@@ -147,7 +155,7 @@ async function recordOutgoing(refs, rms) {
 
 /* ---------- Record receipt (the recipient's receiving copy came back) ---------- */
 async function recordReceipt(refs, rms, id) {
-  const o = rms.outs.find((x) => x.id === id);
+  const o = [...rms.outs, ...rms.psao].find((x) => x.id === id);
   let rec = null;
   const res = await modal({
     title: 'Record Receipt · ' + o.trackingNo,
@@ -169,7 +177,7 @@ async function recordReceipt(refs, rms, id) {
 }
 
 function viewOutgoing(refs, rms, id) {
-  const o = rms.outs.find((x) => x.id === id);
+  const o = [...rms.outs, ...rms.psao].find((x) => x.id === id);
   const row = (k, v) => `<div class="kvrow"><small>${k}</small><span>${v}</span></div>`;
   modal({ title: o.trackingNo, body: `${row('Status', o.recipient ? pill('Received', 'ok') : pill('Awaiting acknowledgment', 'warn'))}
     ${row('To', esc(o.toName) + (o.toCode ? ` <small class="mono">${esc(o.toCode)}</small>` : ''))}

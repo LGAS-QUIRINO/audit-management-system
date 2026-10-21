@@ -15,12 +15,13 @@ const ADMIN_TABLES = { users: true, teams: true, lgus: true };            // onl
 // Who may change the Records Management lists (by role).
 const TABLE_ROLES = {
   rms_reports: ['admin', 'osa'],                                  // Report Library: Admin and SA Staff
-  rms_settings: ['admin', 'osa'],                                 // monitoring start, report groups
+  rms_settings: ['admin', 'osa', 'sa'],                           // monitoring start, report groups, PSAO document types
   rms_offices: ['admin', 'sa', 'atl', 'member'],                  // Office Setup
   rms_items: ['admin', 'sa', 'atl', 'member', 'osa', 'staff']     // Receiving: everyone with a role
 };
 const DECIDERS = ['admin', 'sa', 'atl', 'member'];                // may accept or reject (not JO or SA Staff)
 const CORRECTORS = ['admin', 'sa'];                               // may correct a received record
+const PSAO = ['admin', 'sa', 'osa'];                              // may record in the PSAO books (PSAO-IN / PSAO-OUT)
 const HEAD = ['id', 'version', 'updatedAt', 'updatedBy', 'deleted', 'data'];
 const SEED = __SEED__;
 
@@ -52,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-10-19b · large records split over cells · earlier batches';
+const SCRIPT_VERSION = '2026-10-21 · PSAO desk (PSAO-IN / PSAO-OUT per document type)';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -152,7 +153,7 @@ function push_(changes, email, roles) {
         const cur = row ? rec_(sh.getRange(row, 1, 1, Math.max(HEAD.length, sh.getLastColumn())).getValues()[0]) : null;
         if ((cur ? cur.version : 0) !== Number(c.baseVersion || 0)) { res.status = 'conflict'; res.record = cur; return res; }
         if (c.table === 'users' && !c.deleted) checkUser_(c, email);
-        if (c.table === 'rms_items') checkItem_(c, cur, has(DECIDERS), isAdmin, has(CORRECTORS));
+        if (c.table === 'rms_items') checkItem_(c, cur, has(DECIDERS), isAdmin, has(CORRECTORS), has(PSAO));
         const next = rowOf_(c.id, (cur ? cur.version : 0) + 1, new Date().toISOString(), email, !!c.deleted, c.data);
         writeRow_(sh, row, next);
         log.appendRow([next[2], email, row ? (c.deleted ? 'deleted' : 'changed') : 'added', c.table, c.id]);
@@ -166,10 +167,14 @@ function push_(changes, email, roles) {
 /* ---------- Records Management: receiving ---------- */
 // Tracking numbers are given here, so two people receiving at the same time never get the same number.
 // One running series per office per year: MAD-ABB-RCI-2026-0012 (reports), MAD-ABB-2026-0013 (communications), OUT-2026-0004.
+// The PSAO books: one series per document type per year, PSAO-IN-IND-2026-0001 / PSAO-OUT-MEMO-2026-0001.
 // Once given, a record's number never changes. Only auditors may accept or reject.
-function checkItem_(c, cur, decider, isAdmin, corrector) {
+function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
   if (c.deleted && !isAdmin) throw new Error('Only the Admin can delete a received item.');
   const d = c.data || {}, old = cur && cur.data ? cur.data : null;
+  // The PSAO books (and team reports received at the PSAO) are recorded by the SA, the OSA Staff or the Admin.
+  // ATLs and members may then update the routing (assign, acted on).
+  if (!old && !psao && (d.kind === 'psao-in' || d.kind === 'psao-out' || d.atPsao)) throw new Error('Only the SA or the OSA Staff can record in the PSAO book.');
   // Corrections (date received, period, names, unticking a document) are for the Admin and the SA only.
   if (old && !corrector) {
     const same = function (k) { return JSON.stringify(d[k] === undefined ? null : d[k]) === JSON.stringify(old[k] === undefined ? null : old[k]); };
