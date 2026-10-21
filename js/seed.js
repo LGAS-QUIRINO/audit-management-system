@@ -1,8 +1,9 @@
 // Starting data for AMS: roles, teams, and the LGU Master List (PSA names). Same IDs as the AAR System so it can move in later.
 export const slug = (s) => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-export const ROLE_NAMES = { member: 'Team Member', staff: 'Team Staff (JO)', atl: 'Audit Team Leader', sa: 'Supervising Auditor', osa: 'OSA Staff', admin: 'Admin' };
-export const POSITIONS = ['State Auditor V', 'State Auditor IV', 'State Auditor III', 'State Auditor II', 'State Auditor I', 'State Auditing Examiner II', 'OSA Staff', 'Job Order'];
+export const ROLE_NAMES = { member: 'Team Member', staff: 'Team Staff (JO)', atl: 'Audit Team Leader', sa: 'Supervising Auditor', osa: 'SA Staff', admin: 'Admin' };
+// Positions offered in Users & Roles (any other can be typed with "Other…").
+export const POSITIONS = ['State Auditor V', 'State Auditor IV', 'State Auditor III', 'State Auditor II', 'State Auditor I', 'State Auditing Examiner II', 'SA Staff', 'JO'];
 
 // Barangays per municipality, PSA Philippine Standard Geographic Code names.
 export const OFFICIAL_BARANGAYS = {

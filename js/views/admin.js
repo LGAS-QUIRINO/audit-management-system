@@ -57,7 +57,7 @@ export function usersHtml(refs) {
         <section class="panel"><div class="panel-head"><h2>The Six Roles</h2></div><div class="note">
           <p><b>Admin</b> – manages users, teams and the LGU list.</p>
           <p><b>Supervising Auditor</b> – sees all teams; final approvals.</p>
-          <p><b>OSA Staff</b> – staff of the SA; sees all teams.</p>
+          <p><b>SA Staff</b> – staff of the SA; sees all teams.</p>
           <p><b>Audit Team Leader</b> – reviews and approves the team's work.</p>
           <p><b>Team Member</b> – auditor of the team.</p>
           <p class="last"><b>Team Staff (JO)</b> – encoding work for the team.</p></div></section>
@@ -86,7 +86,8 @@ async function editUser(refs, id) {
     body: `<div class="field"><label for="u-email">Gmail</label><input class="input mono" id="u-email" type="email" value="${esc(d.email)}" placeholder="name@gmail.com"><span class="hint">The Google account this person signs in with.</span></div>
       <div class="field"><label for="u-name">Full Name (as printed)</label><input class="input upper" id="u-name" value="${esc(d.name)}" placeholder="ATTY. JUAN A. DELA CRUZ"></div>
       <div class="field"><label for="u-nick">Name to Greet (optional)</label><input class="input" id="u-nick" value="${esc(d.nickname || '')}" placeholder="e.g. Cess"><span class="hint">Shown only on the Dashboard greeting.</span></div>
-      <div class="two"><div class="field"><label for="u-pos">Position</label><input class="input" id="u-pos" list="pos-list" value="${esc(d.position)}"><datalist id="pos-list">${POSITIONS.map((p) => `<option>${p}</option>`).join('')}</datalist></div>
+      <div class="two"><div class="field"><label for="u-pos">Position</label><select class="input" id="u-pos">${POSITIONS.map((p) => `<option ${p === d.position ? 'selected' : ''}>${p}</option>`).join('')}<option value="__other" ${d.position && !POSITIONS.includes(d.position) ? 'selected' : ''}>Other…</option></select>
+          <input class="input" id="u-pos-other" value="${esc(d.position && !POSITIONS.includes(d.position) ? d.position : '')}" placeholder="Type the position" style="margin-top:6px" ${d.position && !POSITIONS.includes(d.position) ? '' : 'hidden'}></div>
         <div class="field"><label for="u-des">Designation</label><input class="input" id="u-des" value="${esc(d.designation)}" placeholder="e.g. OIC-Audit Team Leader"></div></div>
       <fieldset class="field"><legend>Roles</legend><div class="checks">${Object.entries(ROLE_NAMES).map(([k, v]) => `<label><input type="checkbox" name="role" value="${k}" ${(d.roles || []).includes(k) ? 'checked' : ''}> ${v}</label>`).join('')}</div></fieldset>
       <fieldset class="field"><legend>Teams</legend><div class="checks">${[...refs.teams].sort(byName).map((t) => `<label><input type="checkbox" name="team" value="${t.id}" ${(d.teamIds || []).includes(t.id) ? 'checked' : ''}> ${esc(t.data.name)}${t.data.officeCode ? ' (' + esc(t.data.officeCode) + ')' : ''}</label>`).join('')}</div></fieldset>
@@ -94,6 +95,8 @@ async function editUser(refs, id) {
         <span class="hint">Leave all unticked to give access to every municipality of the team. For Team Members and Team Staff only.</span></fieldset>
       ${u ? `<div class="field"><label for="u-status">Status</label><select class="input" id="u-status">${[['invited', 'Invited (not signed in yet)'], ['active', 'Active'], ['disabled', 'Removed (history kept)']].map(([v, l]) => `<option value="${v}" ${d.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>` : ''}`,
     onOpen: (bg) => {
+      // Position: the list, or "Other…" to type one.
+      $('#u-pos', bg).addEventListener('change', () => { const o = $('#u-pos', bg).value === '__other'; $('#u-pos-other', bg).hidden = !o; if (o) $('#u-pos-other', bg).focus(); });
       const picked = new Set(d.munIds || []);
       const drawMuns = () => {
         $$('input[name=mun]', bg).forEach((x) => { if (x.checked) picked.add(x.value); else picked.delete(x.value); });
@@ -124,7 +127,7 @@ async function editUser(refs, id) {
       const status = u ? $('#u-status', bg).value : 'invited';
       if (u && id === refs.me?.id && (!roles.includes('admin') || status === 'disabled')) { toast('You cannot remove your own Admin access.', 'bad'); return false; }
       const des = $('#u-des', bg).value.trim().replace(/\s*-\s*/g, '-');
-      out = { email, name, nickname: $('#u-nick', bg).value.trim(), position: $('#u-pos', bg).value.trim(), designation: ONLY_STAFF(roles) ? '' : des, roles, teamIds,
+      out = { email, name, nickname: $('#u-nick', bg).value.trim(), position: $('#u-pos', bg).value === '__other' ? $('#u-pos-other', bg).value.trim() : $('#u-pos', bg).value, designation: ONLY_STAFF(roles) ? '' : des, roles, teamIds,
         munIds: $('#u-munbox', bg).hidden ? [] : $$('input[name=mun]:checked', bg).map((x) => x.value).filter((m) => teamIds.includes(refs.lgu[m]?.data.teamId)), status };
       return true;
     } }]
