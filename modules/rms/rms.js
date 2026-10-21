@@ -6,7 +6,7 @@ import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
-import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn } from './receiving.js';
+import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem } from './receiving.js';
 
 // Load this module's look once.
 if (!document.querySelector('link[data-rms]')) {
@@ -745,14 +745,83 @@ async function editOffice(refs, rms, a, extra) {
     } }]
   });
   if (res !== 'save') return;
+  let id;
   if (!isExtra) {
-    const id = a.main?.id || 'off-' + a.auditeeId;
+    id = a.main?.id || 'off-' + a.auditeeId;
     await store.save('rms_offices', id, { ...(a.main ? strip(a.main) : {}), auditeeId: a.auditeeId, kind: 'main', name: a.name, teamId: a.teamId, munId: a.munId, ...out }, by(refs));
   } else {
-    const id = extra === 'new' ? newId('off') : o.id;
+    id = extra === 'new' ? newId('off') : o.id;
     await store.save('rms_offices', id, { ...(extra === 'new' ? {} : strip(o)), auditeeId: a.auditeeId, kind: 'extra', teamId: a.teamId, munId: a.munId, ...out }, by(refs));
   }
   toast('Office saved.', 'ok');
+  if (extra !== 'new') await applyRenames(refs, rms, id, o, out, isExtra ? out.name + ' · ' + a.name : '');
+}
+
+// A renamed line (e.g. a bank account or an office in an FS list) or extra requirement is applied to every record already
+// received for this office, so the period totals and the Submission Monitor keep counting it. A renamed extra office also
+// updates the name kept on its outgoing and PSAO records.
+async function applyRenames(refs, rms, oid, o, out, newLabel) {
+  const items = rms.items.filter((i) => i.officeId === oid && i.kind !== 'comm');
+  const notes = new Set([o.note, out.note].filter(Boolean));
+  const retired = { ...(out.retired || o.retired || {}) };
+  // Names in the received records of a report that are no longer in the office's list (renamed now or earlier).
+  const namesIn = (rid) => [...new Set(items.filter((i) => i.reportId === rid).flatMap((i) => (i.checklist || []).map((c) => (c.part ? c.line : c.item)))
+    .filter((x) => x && !notes.has(x)))];
+  const asks = [];
+  Object.keys(out.lists || {}).filter((rid) => rms.reports.find((r) => r.id === rid)?.perOffice).forEach((rid) => {
+    const oldL = (o.lists || {})[rid] || [], newL = out.lists[rid] || [], seen = namesIn(rid);
+    const orphans = seen.filter((l) => !newL.includes(l) && !(retired[rid] || []).includes(l));
+    const unused = newL.filter((l) => !seen.includes(l));
+    orphans.forEach((l, k) => {
+      // Best guess: the same place in the list (renamed now), else the same order among the names not yet used.
+      const pos = oldL.includes(l) && oldL.length === newL.length ? newL[oldL.indexOf(l)] : orphans.length === unused.length ? unused[k] : '';
+      asks.push({ rid, old: l, guess: unused.includes(pos) ? pos : '', choices: newL });
+    });
+  });
+  const oldNote = o.note || '', newNote = out.note || '';
+  if (oldNote && newNote && oldNote !== newNote && items.some((i) => (i.checklist || []).some((c) => c.item === oldNote))) asks.push({ rid: '', old: oldNote, guess: newNote, choices: [newNote], note: true });
+  let map = [];
+  if (asks.length) {
+    const rep = (rid) => rms.reports.find((r) => r.id === rid);
+    const res = await modal({
+      title: 'Apply the New Names to Received Records?', wide: true,
+      body: `<p>These names are in records already received but no longer in the office's list. Choose the new name for each, so the period totals and the Submission Monitor count them correctly. Choose “Removed” for one that was really taken off (e.g. a closed account); it will not be asked again.</p>
+        ${asks.map((x, k) => `<div class="field"><label for="rn-${k}">${x.note ? 'Extra requirement' : esc((rep(x.rid)?.code || '') + ' · ' + (rep(x.rid)?.lineLabel || 'Line'))}: <b>${esc(x.old)}</b> is now</label>
+          <select class="input" id="rn-${k}"><option value="">Removed (keep the old name in the records)</option>${x.choices.map((c) => `<option value="${esc(c)}" ${c === x.guess ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>`).join('')}`,
+      buttons: [{ label: 'Ask Me Later', value: null }, { label: 'Apply to All Records', cls: 'primary', value: 'go', check: (bg) => { map = asks.map((x, k) => ({ ...x, to: $('#rn-' + k, bg).value })); return true; } }]
+    });
+    if (res !== 'go') map = [];
+    // "Removed": remembered on the office so it is not asked again.
+    const gone = map.filter((x) => !x.to && !x.note);
+    if (gone.length) {
+      gone.forEach((x) => { retired[x.rid] = [...new Set([...(retired[x.rid] || []), x.old])]; });
+      const cur = await store.get('rms_offices', oid);
+      if (cur) await store.save('rms_offices', oid, { ...cur.data, retired }, by(refs));
+    }
+    map = map.filter((x) => x.to);
+  }
+  let n = 0;
+  for (const i of items) {
+    let changed = false;
+    const checklist = (i.checklist || []).map((c) => {
+      const m = map.find((x) => (x.note ? !c.part && c.item === x.old : x.rid === i.reportId && (c.line === x.old || (!c.part && !c.line && c.item === x.old))));
+      if (!m) return c;
+      changed = true;
+      return c.part ? { ...c, line: m.to, item: `${m.to} · ${c.part}` } : { ...c, item: m.to, ...(c.line ? { line: m.to } : {}) };
+    });
+    if (!changed) continue;
+    const { id, _new: _n, ...data } = i;
+    await saveItem(id, { ...data, checklist }, by(refs)); n++;
+  }
+  // Outgoing and PSAO records keep the office name they were sent to or received from.
+  let k = 0;
+  if (newLabel) for (const x of [...rms.outs, ...rms.psao].filter((x) => x.officeId === oid)) {
+    const key = x.kind === 'psao-in' ? 'fromOutside' : 'toName';
+    if (!x[key] || x[key] === newLabel) continue;
+    const { id, _new: _n, ...data } = x;
+    await store.save('rms_items', id, { ...data, [key]: newLabel }, by(refs)); k++;
+  }
+  if (n || k) toast(`Updated ${n + k} received record${n + k === 1 ? '' : 's'} with the new names.`, 'ok');
 }
 
 async function copyReports(refs, rms, rows) {
