@@ -35,7 +35,7 @@ export function usersHtml(refs) {
   const list = [...refs.users].sort(byName);
   const removedN = list.filter((u) => u.data.status === 'disabled').length;
   const cols = 'grid-template-columns:minmax(170px,1.5fr) minmax(130px,1.1fr) minmax(140px,1.1fr) 84px 56px';
-  const munName = (id) => refs.lgu[id]?.data.name || '';
+  const munName = (id) => (refs.lgu[id]?.data.kind === 'province' ? 'Province' : refs.lgu[id]?.data.name) || '';
   return `<div class="page">
     <div class="page-head"><div><h1>Users &amp; Roles</h1><p>Each person signs in with their own Gmail. Position and designation print on documents exactly as entered here. One list for all modules.</p></div>
       <button class="btn primary" id="add-user">+ Add User</button></div>
@@ -80,7 +80,9 @@ async function editUser(refs, id) {
   const u = id ? refs.user[id] : null;
   const d = u ? u.data : { email: '', name: '', nickname: '', position: 'State Auditor I', designation: '', roles: ['member'], teamIds: [], munIds: [], status: 'invited' };
   let out = null;
-  const muns = (tid) => refs.lgus.filter((l) => l.data.kind === 'municipality' && l.data.teamId === tid).sort(byName);
+  // A team's areas: the Province (Team 1) first, then its municipalities.
+  const muns = (tid) => refs.lgus.filter((l) => (l.data.kind === 'municipality' || l.data.kind === 'province') && l.data.teamId === tid)
+    .sort((a, b) => (a.data.kind === 'province' ? -1 : b.data.kind === 'province' ? 1 : a.data.name.localeCompare(b.data.name)));
   const res = await modal({
     title: u ? 'Edit User' : 'Add User',
     body: `<div class="field"><label for="u-email">Gmail</label><input class="input mono" id="u-email" type="email" value="${esc(d.email)}" placeholder="name@gmail.com"><span class="hint">The Google account this person signs in with.</span></div>
@@ -91,8 +93,8 @@ async function editUser(refs, id) {
         <div class="field"><label for="u-des">Designation</label><input class="input" id="u-des" value="${esc(d.designation)}" placeholder="e.g. OIC-Audit Team Leader"></div></div>
       <fieldset class="field"><legend>Roles</legend><div class="checks">${Object.entries(ROLE_NAMES).map(([k, v]) => `<label><input type="checkbox" name="role" value="${k}" ${(d.roles || []).includes(k) ? 'checked' : ''}> ${v}</label>`).join('')}</div></fieldset>
       <fieldset class="field"><legend>Teams</legend><div class="checks">${[...refs.teams].sort(byName).map((t) => `<label><input type="checkbox" name="team" value="${t.id}" ${(d.teamIds || []).includes(t.id) ? 'checked' : ''}> ${esc(t.data.name)}${t.data.officeCode ? ' (' + esc(t.data.officeCode) + ')' : ''}</label>`).join('')}</div></fieldset>
-      <fieldset class="field" id="u-munbox"><legend>Municipalities</legend><div id="u-muns"></div>
-        <span class="hint">Leave all unticked to give access to every municipality of the team. For Team Members and Team Staff only.</span></fieldset>
+      <fieldset class="field" id="u-munbox"><legend>Areas (Province / Municipalities)</legend><div id="u-muns"></div>
+        <span class="hint">Leave all unticked to give access to everything of the team. For Team Members and Team Staff only.</span></fieldset>
       ${u ? `<div class="field"><label for="u-status">Status</label><select class="input" id="u-status">${[['invited', 'Invited (not signed in yet)'], ['active', 'Active'], ['disabled', 'Removed (history kept)']].map(([v, l]) => `<option value="${v}" ${d.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>` : ''}`,
     onOpen: (bg) => {
       // Position: the list, or "Other…" to type one.
@@ -101,7 +103,7 @@ async function editUser(refs, id) {
       const drawMuns = () => {
         $$('input[name=mun]', bg).forEach((x) => { if (x.checked) picked.add(x.value); else picked.delete(x.value); });
         const teams = $$('input[name=team]:checked', bg).map((x) => x.value);
-        $('#u-muns', bg).innerHTML = teams.length ? teams.map((tid) => `<span class="hint">${esc(refs.team[tid]?.data.name || '')}</span><div class="checks">${muns(tid).map((m) => `<label><input type="checkbox" name="mun" value="${m.id}" ${picked.has(m.id) ? 'checked' : ''}> ${esc(m.data.name)}</label>`).join('')}</div>`).join('') : '<span class="hint">Tick a team first.</span>';
+        $('#u-muns', bg).innerHTML = teams.length ? teams.map((tid) => `<span class="hint">${esc(refs.team[tid]?.data.name || '')}</span><div class="checks">${muns(tid).map((m) => `<label><input type="checkbox" name="mun" value="${m.id}" ${picked.has(m.id) ? 'checked' : ''}> ${esc(m.data.kind === 'province' ? 'Province of Quirino' : m.data.name)}</label>`).join('')}</div>`).join('') : '<span class="hint">Tick a team first.</span>';
       };
       const roleState = () => {
         const roles = $$('input[name=role]:checked', bg).map((x) => x.value);
