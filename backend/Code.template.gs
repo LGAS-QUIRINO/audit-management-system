@@ -53,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-10-21 · PSAO desk (PSAO-IN / PSAO-OUT per document type)';
+const SCRIPT_VERSION = '2026-10-21b · PSAO desk · numbers per report (renumberAll)';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -166,7 +166,8 @@ function push_(changes, email, roles) {
 
 /* ---------- Records Management: receiving ---------- */
 // Tracking numbers are given here, so two people receiving at the same time never get the same number.
-// One running series per office per year: MAD-ABB-RCI-2026-0012 (reports), MAD-ABB-2026-0013 (communications), OUT-2026-0004.
+// One running series per office per report per year: MAD-ABB-RCI-2026-0012 (the app sends the series key office|report);
+// communications one series per office per year (MAD-ABB-2026-0013, from outside OUT-2026-0004).
 // The PSAO books: one series per document type per year, PSAO-IN-IND-2026-0001 / PSAO-OUT-MEMO-2026-0001.
 // Once given, a record's number never changes. Only auditors may accept or reject.
 function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
@@ -198,6 +199,55 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
   const code = key === 'outside' ? 'OUT' : d.officeCode;
   d.series = n + 1; d.trackingYear = year; d.seriesKey = key;
   d.trackingNo = [code, d.kind === 'comm' ? '' : d.reportCode, year, ('000' + d.series).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
+}
+
+/* ---------- one-time: renumber the tracking numbers (21 Oct 2026) ---------- */
+// Run once from the Apps Script editor (choose renumberAll, then Run). Every received report gets a number in its own
+// series per office, per report and per year, in the order received: PGQ-OPAC-FS-2026-0001, -0002, …
+// Communications from an office: one series per office per year (from outside: OUT-2026-0001 …).
+// Outgoing records that mention an old number ("related") are updated. The list of old → new numbers is written to the log
+// sheet and to the Execution log. Safe to run again: numbers already in order stay the same.
+function renumberAll() {
+  const lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    const sh = sheet_('rms_items'), n = sh.getLastRow();
+    if (n < 2) { Logger.log('Nothing to renumber.'); return; }
+    const w = Math.max(HEAD.length, sh.getLastColumn());
+    const all = sh.getRange(2, 1, n - 1, w).getValues().map(function (r, i) { return { row: i + 2, rec: r[0] ? rec_(r) : null }; })
+      .filter(function (x) { return x.rec && !x.rec.deleted && x.rec.data; });
+    const groups = {};
+    all.forEach(function (x) {
+      const d = x.rec.data;
+      if (!d.trackingNo || ['out', 'psao-in', 'psao-out'].indexOf(d.kind) >= 0) return;
+      const key = d.kind === 'comm' ? (d.officeId || 'outside') : d.officeId + '|' + d.reportCode;
+      const g = key + '#' + d.trackingYear;
+      (groups[g] = groups[g] || { key: key, list: [] }).list.push(x);
+    });
+    const map = {}, dirty = [];
+    Object.keys(groups).forEach(function (g) {
+      const grp = groups[g];
+      grp.list.sort(function (a, b) {
+        return String(a.rec.data.receivedAt).localeCompare(String(b.rec.data.receivedAt)) || String(a.rec.data.encodedAt || '').localeCompare(String(b.rec.data.encodedAt || '')) || a.row - b.row;
+      });
+      grp.list.forEach(function (x, i) {
+        const d = x.rec.data, s = i + 1;
+        const code = d.kind === 'comm' && !d.officeId ? 'OUT' : d.officeCode;
+        const no = [code, d.kind === 'comm' ? '' : d.reportCode, d.trackingYear, ('000' + s).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
+        if (no === d.trackingNo && d.series === s && d.seriesKey === grp.key) return;
+        if (no !== d.trackingNo) map[d.trackingNo] = no;
+        d.trackingNo = no; d.series = s; d.seriesKey = grp.key;
+        dirty.push(x);
+      });
+    });
+    // Outgoing records that refer to an old number.
+    all.forEach(function (x) { const d = x.rec.data; if (d.related && map[d.related] && dirty.indexOf(x) < 0) { d.related = map[d.related]; dirty.push(x); } });
+    const now = new Date().toISOString();
+    let log = sheet_('log'); if (!log) { log = SpreadsheetApp.getActiveSpreadsheet().insertSheet('log'); log.appendRow(['at', 'by', 'action', 'table', 'id']); }
+    dirty.forEach(function (x) { writeRow_(sh, x.row, rowOf_(x.rec.id, x.rec.version + 1, now, 'renumber', false, x.rec.data)); });
+    Object.keys(map).forEach(function (old) { log.appendRow([now, 'renumber', old + ' → ' + map[old], 'rms_items', '']); });
+    Logger.log('Renumbered ' + Object.keys(map).length + ' tracking numbers (' + dirty.length + ' records updated).');
+    Object.keys(map).forEach(function (old) { Logger.log(old + ' → ' + map[old]); });
+  } finally { lock.releaseLock(); }
 }
 
 // Same Gmail twice is not allowed; the Admin cannot remove their own Admin access.
