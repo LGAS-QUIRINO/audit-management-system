@@ -110,14 +110,16 @@ export const isAccepted = (i) => i.status === 'accepted' || i.status === 'comple
 export const lacksDocs = (i) => i.kind !== 'comm' && i.status !== 'rejected' && missing(i).length > 0;
 
 /* ---------- numbers ---------- */
-// One running series per office per year, shared by reports and communications: MAD-ABB-RCI-2026-0012 / MAD-ABB-2026-0013.
-function nextSeries(rms, officeId, year) {
-  const nums = rms.items.filter((i) => (i.seriesKey || i.officeId) === officeId && i.trackingNo && i.trackingYear === year).map((i) => i.series || 0);
+// One running series per office, per report and per year: PGQ-OPAC-FS-2026-0001, PGQ-OPAC-BRS-2026-0001 (since 21 Oct 2026;
+// earlier numbers kept one series per office). Communications: one series per office per year, MAD-ABB-2026-0013.
+function nextSeries(rms, key, year) {
+  const nums = rms.items.filter((i) => (i.seriesKey || i.officeId) === key && i.trackingNo && i.trackingYear === year).map((i) => i.series || 0);
   return Math.max(0, ...nums) + 1;
 }
 function trackingNo(rms, office, reportCode, year) {
-  const n = nextSeries(rms, office.id, year);
-  return { trackingNo: [office.code, reportCode, year, String(n).padStart(4, '0')].filter(Boolean).join('-'), series: n, trackingYear: year, seriesKey: office.id };
+  const key = reportCode ? office.id + '|' + reportCode : office.id;
+  const n = nextSeries(rms, key, year);
+  return { trackingNo: [office.code, reportCode, year, String(n).padStart(4, '0')].filter(Boolean).join('-'), series: n, trackingYear: year, seriesKey: key };
 }
 // Older records may carry a pending code instead of a tracking number.
 export const numberOf = (i) => i.trackingNo || i.pendingCode || '';
