@@ -57,7 +57,7 @@ export function usersHtml(refs) {
         <section class="panel"><div class="panel-head"><h2>The Six Roles</h2></div><div class="note">
           <p><b>Admin</b> – manages users, teams and the LGU list.</p>
           <p><b>Supervising Auditor</b> – sees all teams; final approvals.</p>
-          <p><b>SA Staff</b> – staff of the SA; sees all teams.</p>
+          <p><b>OSA Staff</b> – staff of the SA; sees all teams.</p>
           <p><b>Audit Team Leader</b> – reviews and approves the team's work.</p>
           <p><b>Team Member</b> – auditor of the team.</p>
           <p class="last"><b>Team Staff (JO)</b> – encoding work for the team.</p></div></section>
