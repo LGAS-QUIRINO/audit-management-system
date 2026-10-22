@@ -8,7 +8,7 @@ import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { pdfToLines, parseDetails } from './pdfread.js';
 import { DEMO } from '../../js/config.js';
 import { syncNow } from '../../js/sync.js';
-import { scopesFor, visibleOffices, periodsOf, periodLabel, dueDate, span, fmtDT, fmtDate, jobOrderOnly, hasRole } from './rms.js';
+import { scopesFor, visibleOffices, periodsOf, periodLabel, dueDate, span, fmtDT, fmtDate, jobOrderOnly, hasRole, byAnnual } from './rms.js';
 
 const by = (refs) => refs.me?.data.email || '';
 const myName = (refs) => refs.me?.data.name || '';
@@ -50,8 +50,63 @@ export function applyBatch(i, picked, pickedNa, at, who, whoName) {
 /* ---------- a period across its transmittals ---------- */
 // Every transmittal (submission) has its own tracking number. What a period still lacks is worked out over all of its
 // transmittals: an account or document counts as in once any transmittal brought it (or it was marked N/A).
-export const periodRecs = (rms, officeId, reportId, period) => rms.items.filter((i) => i.kind !== 'comm' && i.officeId === officeId && i.reportId === reportId && i.period === period && i.status !== 'rejected')
-  .sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)));
+// Linked documents (e.g. the Trial Balance in the quarterly report counts for that month's Trial Balance) come in as
+// "virtual" transmittals: built from the other report's records, never saved.
+export const periodRecs = (rms, officeId, reportId, period) => [...rms.items.filter((i) => i.kind !== 'comm' && i.officeId === officeId && i.reportId === reportId && i.period === period && i.status !== 'rejected'),
+  ...linkedRecs(rms, officeId, reportId, period)].sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)));
+
+/* ---------- linked documents between reports (Report Library: "Same document as") ---------- */
+// A report's checklist part may be the same document as a part of another report, e.g. QFR "Trial Balance" = TB (monthly).
+// Periods match when they end in the same month: QFR Q1 ↔ TB March, AFR 2026 ↔ TB December ↔ QFR Q4.
+// Links work both ways: a document received with either report counts for both, each against its own due date.
+// Entry key: { line, part }. Per-office lists without parts use the line itself (part '*').
+export function entryKey(r, e) {
+  if (r && r.perOffice) return (r.checklist || []).length ? (e.part ? { line: e.line, part: e.part } : { line: null, part: e.item }) : { line: e.item, part: '*' };
+  return { line: null, part: e.item };
+}
+const endOf = (p) => { const [y, , b] = span(p); return y * 100 + b; };
+export function linkPairs(rms, reportId) {
+  const out = [], seen = new Set();
+  const add = (sid, sPart, rPart) => { const k = sid + '|' + sPart + '|' + rPart; if (seen.has(k)) return; seen.add(k); out.push({ sid, sPart, rPart }); };
+  const R = rms.reports.find((x) => x.id === reportId);
+  if (!R || R.frequency === 'As needed') return out;
+  Object.entries(R.links || {}).forEach(([part, l]) => { if (l && l.reportId && l.reportId !== reportId) add(l.reportId, l.part, part); });
+  rms.reports.forEach((S) => { if (S.id !== reportId) Object.entries(S.links || {}).forEach(([part, l]) => { if (l && l.reportId === reportId) add(S.id, part, l.part); }); });
+  return out.filter((x) => { const S = rms.reports.find((r) => r.id === x.sid); return S && S.frequency !== 'As needed'; });
+}
+function linkedRecs(rms, officeId, reportId, period) {
+  if (!rms.reports || !period) return [];
+  const pairs = linkPairs(rms, reportId);
+  if (!pairs.length) return [];
+  const R = rms.reports.find((x) => x.id === reportId), office = (rms.offices || []).find((o) => o.id === officeId);
+  const ents = entriesFor(R, office);
+  if (!ents.length) return [];
+  const end = endOf(period), out = [];
+  [...new Set(pairs.map((x) => x.sid))].forEach((sid) => {
+    const S = rms.reports.find((x) => x.id === sid), mine = pairs.filter((x) => x.sid === sid);
+    rms.items.filter((i) => i.kind !== 'comm' && i.officeId === officeId && i.reportId === sid && i.status !== 'rejected' && i.period && endOf(i.period) === end).forEach((src) => {
+      const sk = (src.checklist || []).map((c) => ({ c, k: entryKey(S, c) }));
+      let any = false;
+      const checklist = ents.map((e) => {
+        const ek = entryKey(R, e);
+        const hit = mine.filter((x) => x.rPart === ek.part).map((x) => {
+          const cand = sk.filter(({ k }) => k.part === x.sPart);
+          if (ek.line != null) return cand.find(({ c, k }) => (k.line == null || k.line === ek.line) && (c.ok || c.na));
+          // One document here, one per line there: it counts once every line has it.
+          const lined = cand.filter(({ k }) => k.line != null);
+          if (lined.length) return lined.every(({ c }) => c.ok || c.na) ? lined[0] : null;
+          return cand.find(({ c }) => c.ok || c.na);
+        }).find(Boolean);
+        if (!hit) return { ...e, ok: false };
+        any = true;
+        return hit.c.ok ? { ...e, ok: true, at: hit.c.at || src.receivedAt } : { ...e, ok: false, na: true };
+      });
+      if (any) out.push({ id: 'via-' + src.id, virtual: true, kind: 'report', officeId, reportId, reportCode: R.code, period, viaCode: S.code, viaPeriod: src.period,
+        status: src.status, receivedAt: src.receivedAt, receivedByName: src.receivedByName, trackingNo: src.trackingNo, checklist, ...(R.lineLabel && R.perOffice ? { lineLabel: R.lineLabel } : {}) });
+    });
+  });
+  return out;
+}
 export function periodChecklist(recs) {
   if (!recs.length) return [];
   const blank = (c) => { const { ok: _o, na: _n, at: _a, late: _l, by: _b, byName: _bn, encodedAt: _e, naAt: _na, naBy: _nb, ...rest } = c; return { ...rest, ok: false }; };
@@ -412,7 +467,7 @@ async function receiveForm(refs, rms, preset = null) {
       const fillPeriods = () => {
         const r = rms.reports.find((x) => x.id === $('#f-rep', bg).value), o = office();
         if (!r || !o) { $('#f-per', bg).innerHTML = ''; $('#f-list', bg).innerHTML = ''; return; }
-        const ps = [...periodsOf(r, year - 1), ...periodsOf(r, year)].filter((p) => { const [y, a] = span(p); return new Date(y, a - 1, 1) <= now; });
+        const ps = [...periodsOf(r, year - 1), ...periodsOf(r, year)].filter((p) => { const [y, a] = span(p); return new Date(y, a - 1, 1) <= now && !byAnnual(r, p); });
         const got = new Set(rms.items.filter((i) => i.officeId === o.id && i.reportId === r.id && i.status !== 'rejected').map((i) => i.period));
         // Default: the earliest period not yet received among the latest few, else the latest.
         // Suggest the earliest period not yet received from the monitoring start onward, else the latest.
@@ -434,7 +489,7 @@ async function receiveForm(refs, rms, preset = null) {
         const box = $('#f-exist', bg);
         if (ex) {
           const t = isGrouped(ex.checklist) ? lineTally(ex.checklist) : null, n = ex.checklist.filter(isIn).length;
-          box.innerHTML = `<b>${esc(periodLabel(p))} ${esc(r.code)} already received in ${recs.length} transmittal${recs.length > 1 ? 's' : ''}:</b> <span class="mono">${recs.map((x) => esc(numberOf(x))).join(', ')}</span><br>
+          box.innerHTML = `<b>${esc(periodLabel(p))} ${esc(r.code)} already received in ${recs.length} transmittal${recs.length > 1 ? 's' : ''}:</b> <span class="mono">${recs.map((x) => esc(numberOf(x)) + (x.virtual ? ` <small>(with the ${esc(x.viaCode)})</small>` : '')).join(', ')}</span><br>
             ${t ? `${t.done.length} of ${t.total} ${esc(((ex.lineLabel || 'account') + 's').toLowerCase())} complete so far.` : `${n} of ${ex.checklist.length} submitted so far.`}
             This transmittal gets its <b>own new tracking number</b>. Only what is still missing is listed.`;
         }
@@ -840,7 +895,7 @@ async function correctItem(refs, rms, id) {
       if ($('#c-find', bg)) $('#c-find', bg).oninput = () => { const v = $('#c-find', bg).value.trim().toLowerCase(); $$('.rcv-items label[data-t], details.acc', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
       if ($('details.acc', bg)) wireAccordions(bg, 'cfix', st);
     },
-    buttons: [{ label: 'Cancel', value: null }, { label: 'Save Correction', cls: 'primary', value: 'save', check: (bg) => {
+    buttons: [{ label: 'Cancel', value: null }, ...(isRep ? [{ label: 'Move to Another Report…', value: 'move' }] : []), { label: 'Save Correction', cls: 'primary', value: 'save', check: (bg) => {
       const why = $('#c-why', bg).value.trim();
       if (!why) { toast('Enter the reason for the correction.', 'bad'); return false; }
       const when = readWhen($('#c-date', bg).value);
@@ -881,6 +936,7 @@ async function correctItem(refs, rms, id) {
       out = { patch, changes, why }; return true;
     } }]
   });
+  if (res === 'move') return moveItem(refs, rms, id);
   if (res !== 'save') return;
   const { id: _x, _new: _n, ...data } = i;
   const corrections = [...(i.corrections || []), { at: new Date().toISOString(), by: by(refs), byName: myName(refs), reason: out.why, changes: out.changes }];
@@ -888,6 +944,60 @@ async function correctItem(refs, rms, id) {
   if (!next.completedAt) delete next.completedAt;
   await saveItem(id, next, by(refs));
   toast('Correction saved and recorded in the history.', 'ok');
+}
+
+/* ---------- move a record to another report (Admin and SA) ---------- */
+// For a submission received under the wrong report (e.g. a quarterly set entered as FS). The record gets a new tracking
+// number in the new report's series (given by the AMS database); the old number is kept in the history.
+async function moveItem(refs, rms, id) {
+  if (!canCorrect(refs)) return toast('Only the Admin and the SA can correct a received record.', 'bad');
+  const i = rms.items.find((x) => x.id === id);
+  const o = (rms.offices || []).find((x) => x.id === i.officeId);
+  const reps = rms.reports.filter((r) => r.id !== i.reportId && (r.active !== false) && (o?.reportIds || []).includes(r.id)).sort((a, b) => a.code.localeCompare(b.code));
+  if (!reps.length) return toast('This office has no other report ticked in Office Setup.', 'bad');
+  const name = (c) => c.part || c.item;
+  let out = null;
+  const res = await modal({
+    title: 'Move to Another Report · ' + numberOf(i), wide: true,
+    body: `<p class="hint">Now: <b>${esc(i.reportCode + ' · ' + periodLabel(i.period))}</b>. Documents with the same name are ticked for you; check the list before saving.</p>
+      <div class="two"><div class="field"><label for="m-rep">Move to report</label><select class="input" id="m-rep">${reps.map((r) => `<option value="${r.id}">${esc(r.code + ' · ' + r.name)}</option>`).join('')}</select></div>
+        <div class="field"><label for="m-per">Period</label><select class="input" id="m-per"></select></div></div>
+      <div><span class="legend">Checklist · tick what was actually submitted</span><div class="rcv-list"><div class="rcv-items long" id="m-list"></div></div></div>
+      <div class="field"><label for="m-why">Reason (required)</label><input class="input" id="m-why" placeholder="e.g. Quarterly report entered as FS by mistake"></div>
+      <p class="hint">It gets a new tracking number in the new report's series. The old number ${esc(numberOf(i))} is kept in the history.</p>`,
+    onOpen: (bg) => {
+      const fill = () => {
+        const r = reps.find((x) => x.id === $('#m-rep', bg).value), now = new Date(), y = +String(i.period).slice(0, 4);
+        const ps = [...periodsOf(r, y - 1), ...periodsOf(r, y), ...periodsOf(r, y + 1)].filter((p) => { const [py, pa] = span(p); return new Date(py, pa - 1, 1) <= now; });
+        const [, , e0] = span(i.period), same = ps.find((p) => span(p)[0] === y && span(p)[2] === e0) || ps.find((p) => span(p)[0] === y) || ps[ps.length - 1];
+        $('#m-per', bg).innerHTML = ps.reverse().map((p) => `<option value="${p}" ${p === same ? 'selected' : ''}>${esc(periodLabel(p))}</option>`).join('');
+        const ents = entriesFor(r, o), had = new Map((i.checklist || []).filter((c) => c.ok).map((c) => [(c.line ? c.line + '|' : '') + name(c), c]));
+        $('#m-list', bg).innerHTML = ents.map((e, k) => `<label><input type="checkbox" name="mv" value="${k}" ${had.has((e.line ? e.line + '|' : '') + (e.part || e.item)) ? 'checked' : ''}> ${esc(e.item)}</label>`).join('') || '<p class="warn-t">This report has no checklist for this office yet.</p>';
+      };
+      $('#m-rep', bg).onchange = fill; fill();
+    },
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Move', cls: 'primary', value: 'save', check: (bg) => {
+      const why = $('#m-why', bg).value.trim(); if (!why) { toast('Enter the reason.', 'bad'); return false; }
+      const r = reps.find((x) => x.id === $('#m-rep', bg).value), period = $('#m-per', bg).value, ents = entriesFor(r, o);
+      if (!ents.length) { toast('This report has no checklist for this office yet.', 'bad'); return false; }
+      const on = new Set($$('input[name=mv]:checked', bg).map((x) => +x.value));
+      if (!on.size) { toast('Tick at least one document.', 'bad'); return false; }
+      const had = new Map((i.checklist || []).filter((c) => c.ok).map((c) => [(c.line ? c.line + '|' : '') + name(c), c]));
+      const checklist = ents.map((e, k) => { const h = had.get((e.line ? e.line + '|' : '') + (e.part || e.item)); return on.has(k) ? { ...e, ok: true, at: h?.at || i.receivedAt, ...(h?.late ? { late: true } : {}) } : { ...e, ok: false, at: '' }; });
+      out = { r, period, checklist, why }; return true; } }]
+  });
+  if (res !== 'save') return;
+  const { id: _x, _new: _n, ...data } = i;
+  const { r, period, checklist, why } = out;
+  const done = checklist.every(isIn);
+  const next = { ...data, reportId: r.id, reportCode: r.code, period, checklist, ...trackingNo(rms, { id: i.officeId, code: i.officeCode }, r.code, +period.slice(0, 4)),
+    corrections: [...(i.corrections || []), { at: new Date().toISOString(), by: by(refs), byName: myName(refs), reason: why, changes: [`moved from ${i.reportCode} · ${periodLabel(i.period)} (${numberOf(i)}) to ${r.code} · ${periodLabel(period)}`] }] };
+  if (isGrouped(checklist)) next.lineLabel = r.lineLabel || 'Line'; else delete next.lineLabel;
+  if (done) next.completedAt = checklist.reduce((m, c) => (c.ok && c.at > m ? c.at : m), ''); else delete next.completedAt;
+  await saveItem(id, next, by(refs));
+  let num = next.trackingNo;
+  if (!DEMO && navigator.onLine) { await syncNow(); const rec = await store.get('rms_items', id); if (rec && !rec.pending) num = rec.data.trackingNo; }
+  toast(`Moved to ${r.code} · ${periodLabel(period)} as ${num}.`, 'ok');
 }
 
 /* ---------- acknowledgment slip (quarter of a letter-size sheet) ---------- */

@@ -63,7 +63,10 @@ async function loadRms() {
     startPeriod: (settings && settings.data && settings.data.startPeriod) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
 }
 const dueText = (r) => !r.due || r.due.kind === 'none' ? 'No set due date'
-  : r.due.kind === 'after' ? `${r.due.days} days after the period ends` : `Day ${r.due.day} of the following period`;
+  : r.due.kind === 'after' ? `${r.due.days} days after the period ends`
+  : r.due.kind === 'date' ? `${MONTHS_LONG[(r.due.month || 1) - 1]} ${r.due.day} after the period ends` : `Day ${r.due.day} of the following period`;
+// Quarterly / semi-annual reports whose last period of the year is replaced by the annual report.
+export const byAnnual = (r, p) => !!(r && r.lastByAnnual && ['Quarterly', 'Semi-annual'].includes(r.frequency) && span(p)[2] === 12);
 
 /* ---------- periods, due dates and status ---------- */
 // Reporting periods of a report in a year: monthly '2026-09', quarterly '2026-Q3', semi-annual '2026-H2', annual '2026'.
@@ -93,6 +96,8 @@ export function dueDate(r, p) {
   if (!r.due || r.due.kind === 'none') return null;
   const [y, , b] = span(p);
   if (r.due.kind === 'after') { const end = new Date(y, b, 0); end.setDate(end.getDate() + r.due.days); end.setHours(23, 59, 59); return end; }
+  // On a set date (e.g. Feb 14): the first such date after the period ends.
+  if (r.due.kind === 'date') { const end = new Date(y, b, 0, 23, 59, 59); let d = new Date(y, r.due.month - 1, r.due.day, 23, 59, 59); if (d <= end) d = new Date(y + 1, r.due.month - 1, r.due.day, 23, 59, 59); return d; }
   const d = new Date(y, b, Math.min(r.due.day, new Date(y, b + 1, 0).getDate())); d.setHours(23, 59, 59); return d;
 }
 export const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
@@ -102,10 +107,12 @@ export const fmtDT = (d) => d ? new Date(d).toLocaleString('en-US', { month: 'sh
 // untracked (before monitoring starts) · nodue · notdue · verify · complete · late · incomplete · overdue
 function cellStatus(rms, office, r, p, now = new Date()) {
   { const [y, , e] = span(p); if (`${y}-${String(e).padStart(2, '0')}` < rms.startPeriod) return { s: 'untracked' }; }
+  if (byAnnual(r, p)) return { s: 'annual' };
   // All transmittals of the period count together (rejected ones do not): a period is complete once everything is in.
+  // Documents that came in with a linked report count too; on their own they only show once they complete the period.
   const recs = periodRecs(rms, office.id, r.id, p);
   const due = dueDate(r, p);
-  if (recs.length) {
+  if (recs.length && (recs.some((x) => !x.virtual) || periodState(recs).done)) {
     const agg = periodState(recs), got = recs[recs.length - 1];
     if (agg.verify) return { s: 'verify', item: got, agg, due };
     if (!agg.done) return { s: 'incomplete', item: got, agg, due };
@@ -115,8 +122,8 @@ function cellStatus(rms, office, r, p, now = new Date()) {
   if (!due) return { s: new Date(y, b, 0) < now ? 'nodue' : 'notdue', due };
   return { s: now > due ? 'overdue' : 'notdue', due };
 }
-const MARK = { complete: '✓', late: 'L', verify: 'V', incomplete: 'M', overdue: '!', notdue: '·', untracked: '—', nodue: '·' };
-const STATUS_TEXT = { complete: 'Accepted, all submitted', late: 'Accepted, all submitted but late', verify: 'Received, for verification', incomplete: 'Accepted, missing documents', overdue: 'Overdue', notdue: 'Not yet due', untracked: 'Before monitoring started', nodue: 'Not yet submitted (no set due date)' };
+const MARK = { complete: '✓', late: 'L', verify: 'V', incomplete: 'M', overdue: '!', notdue: '·', untracked: '—', nodue: '·', annual: 'A' };
+const STATUS_TEXT = { complete: 'Accepted, all submitted', late: 'Accepted, all submitted but late', verify: 'Received, for verification', incomplete: 'Accepted, missing documents', overdue: 'Overdue', notdue: 'Not yet due', untracked: 'Before monitoring started', nodue: 'Not yet submitted (no set due date)', annual: 'Replaced by the annual report' };
 const STATUS_PILL = { complete: 'ok', late: 'late', verify: 'blue', incomplete: 'warn', overdue: 'bad' };
 
 // The auditees of a municipality (or the Province), in display order, each with its main office and any extra offices.
@@ -326,7 +333,7 @@ function acctStatus(rms, office, r, p, line, now = new Date()) {
   const due = dueDate(r, p), recs = periodRecs(rms, office.id, r.id, p);
   const ents = recs.length ? periodState(recs).checklist.filter((c) => c.line === line) : [];
   const mine = recs.filter((x) => (x.checklist || []).some((c) => c.line === line && (c.ok || c.na)));
-  if (mine.length) {
+  if (mine.length && (mine.some((x) => !x.virtual) || ents.every(isIn))) {
     if (mine.some(isVerify)) return { s: 'verify', due, recs: mine, ents };
     if (!ents.every(isIn)) return { s: 'incomplete', due, recs: mine, ents };
     const done = ents.filter((c) => c.ok && !c.optional).reduce((m, c) => (c.at > m ? c.at : m), '');
@@ -365,7 +372,7 @@ function acctHtml(refs, rms, q, ctx) {
       <label>Search<input class="input" id="acct-find" placeholder="e.g. DPWH, TF, 0732-1080"></label>
       <div class="seg"><a href="${qs({ v: 'month' })}">By Period</a><a href="${qs({ v: 'report' })}">By Report</a><a href="${qs({ v: 'acct' })}" class="on">By Bank Account</a></div>
     </div>
-    <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}</div>
+    <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
     ${shownOffs.length ? `<div class="mon-wrap"><table class="mon acct"><thead><tr><th>${esc(r.lineLabel || 'Account')}</th>${ps.map((p) => `<th>${esc(periodShort(p))}</th>`).join('')}<th>Months</th></tr></thead><tbody>${body}</tbody></table></div>`
       : `<div class="empty"><b>No ${esc(((r.lineLabel || 'account') + 's').toLowerCase())} listed yet</b>Add each office's list in Office Setup (${esc(r.code)}).</div>`}
     <div class="note">Per ${esc((r.lineLabel || 'account').toLowerCase())}, over all transmittals of each month. ✓ all required parts in · L in but late · V in a transmittal still for verification · M a required part missing · ! not submitted and overdue · · not yet due. "Months" = complete months of those already due.</div>`;
@@ -427,7 +434,7 @@ function monitorHtml(refs, rms, q) {
         <label>Show<select class="input" data-f="show"><option value="all">All offices</option><option value="overdue" ${show === 'overdue' ? 'selected' : ''}>With overdue only</option><option value="verify" ${show === 'verify' ? 'selected' : ''}>For verification only</option><option value="incomplete" ${show === 'incomplete' ? 'selected' : ''}>Missing documents only</option></select></label>
         <div class="seg"><a href="${qs({ v: 'month' })}" class="${mode === 'month' ? 'on' : ''}">By Period</a><a href="${qs({ v: 'report' })}" class="${mode === 'report' ? 'on' : ''}">By Report</a>${hasPer ? `<a href="${qs({ v: 'acct', r: (r && r.perOffice ? r.id : firstPer.id) })}">By Bank Account</a>` : ''}</div>
       </div>
-      <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}</div>
+      <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
       ${shown.length ? `<div class="mon-wrap"><table class="mon"><thead>${groupRow}<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr></thead><tbody>
         ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small>${multi && tf === 'all' ? `<small> · ${esc(refs.team[g.o.teamId]?.data.name || '')}</small>` : ''}</th>${g.cs.map((x) => x.st
           ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}${countOf(x)}</td>` : '<td class="c na"></td>').join('')}</tr>`).join('')}
@@ -457,7 +464,7 @@ function wireMonitor(refs, rms, q) {
     const miss = st.ents.filter((c) => !isIn(c)).map((c) => c.part), att = st.ents.filter((c) => c.optional && c.ok).map((c) => c.part);
     box.innerHTML = `<div class="panel-head"><h2>${esc(line)} · ${esc(r.code)} · ${esc(periodLabel(p))}</h2><span class="r">${pill(STATUS_TEXT[st.s], STATUS_PILL[st.s] || '')}</span></div>
       ${row('Office', esc(o.label))}${row('Due', st.due ? esc(fmtDate(st.due)) : 'No set due date')}
-      ${row('Transmittals', st.recs.length ? st.recs.map((x) => `<div><span class="mono">${esc(numberOf(x))}</span> ${statusPill(x)} <small>received ${esc(fmtDate(x.receivedAt))}</small></div>`).join('') : (st.s === 'untracked' ? 'Before monitoring started' : 'Not submitted yet'))}
+      ${row('Transmittals', st.recs.length ? st.recs.map((x) => `<div><span class="mono">${esc(numberOf(x))}</span> ${statusPill(x)} <small>received ${esc(fmtDate(x.receivedAt))}${x.virtual ? ` · with the ${esc(x.viaCode)} (${esc(periodLabel(x.viaPeriod))})` : ''}</small></div>`).join('') : (st.s === 'untracked' ? 'Before monitoring started' : 'Not submitted yet'))}
       ${st.recs.length ? row('Parts', st.ents.map((c) => (c.ok ? '✓ ' : c.na ? '– ' : c.optional ? '· ' : '✗ ') + esc(c.part) + (c.optional && !c.ok ? ' (none)' : '')).join(' &nbsp; ')) : ''}
       ${miss.length ? row('Missing', esc(miss.join(', '))) : ''}${att.length ? row('Attached', esc(att.join(', '))) : ''}`;
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -473,7 +480,7 @@ function wireMonitor(refs, rms, q) {
     box.innerHTML = `<div class="panel-head"><h2>${esc(o.name)} · ${esc(r.code)} · ${esc(periodLabel(p))}</h2><span class="r">${pill(STATUS_TEXT[st.s], STATUS_PILL[st.s] || '')}</span></div>
       ${row('Due', st.due ? esc(fmtDate(st.due)) : 'No set due date')}
       ${it ? row(st.agg.recs.length > 1 ? `Transmittals · ${st.agg.recs.length}` : 'Transmittal', st.agg.recs.map((x) => { const n = isGrouped(x.checklist) ? lineTally(x.checklist.map((c) => ({ ...c }))).rows.filter(([, es]) => es.some((e) => e.ok || e.na)).length : (x.checklist || []).filter((c) => c.ok).length;
-          return `<div><span class="mono">${esc(numberOf(x))}</span> ${statusPill(x)} <small>received ${esc(fmtDate(x.receivedAt))}${x.submittedBy ? ' from ' + esc(x.submittedBy) : ''} · ${n} ${isGrouped(x.checklist) ? esc(((x.lineLabel || 'account') + (n === 1 ? '' : 's')).toLowerCase()) : 'document(s)'}</small></div>`; }).join(''))
+          return `<div><span class="mono">${esc(numberOf(x))}</span> ${statusPill(x)} <small>received ${esc(fmtDate(x.receivedAt))}${x.virtual ? ` · with the ${esc(x.viaCode)} (${esc(periodLabel(x.viaPeriod))}), linked document` : ''}${x.submittedBy ? ' from ' + esc(x.submittedBy) : ''} · ${n} ${isGrouped(x.checklist) ? esc(((x.lineLabel || 'account') + (n === 1 ? '' : 's')).toLowerCase()) : 'document(s)'}</small></div>`; }).join(''))
         + row('Period checklist', checklistHtml({ checklist: st.agg.checklist, lineLabel: st.agg.lineLabel }))
         : row('Received', st.s === 'untracked' ? 'Before monitoring started' : 'Nothing received yet')}
       ${row('Checklist required', r.perOffice ? `${((o.lists || {})[r.id] || []).length} ${esc((r.lineLabel || 'line').toLowerCase())}s (Office Setup)${(r.checklist || []).length ? ', each with: ' + r.checklist.map(esc).join(' · ') : ''}` : (r.checklist || []).map(esc).join(' · '))}`;
@@ -573,8 +580,15 @@ function viewReport(rms, id) {
 
 async function editReport(refs, rms, id) {
   const r = id ? rms.reports.find((x) => x.id === id) : { code: '', name: '', basis: '', frequency: 'Monthly', due: { kind: 'after', days: 10 }, checklist: [], active: true };
-  const items = [...(r.checklist || [])];
-  const optional = new Set(r.optional || []);   // parts that may be N/A (e.g. BRS: only the BRS, ledger and bank statement are required)
+  // Each part keeps its first name (o), so a rename can be applied to the records already received.
+  // opt: optional part (e.g. BRS: only the BRS, ledger and bank statement are required). link: "Same document as".
+  const items = (r.checklist || []).map((t) => ({ t, o: t, opt: (r.optional || []).includes(t), link: (r.links || {})[t] || null }));
+  let lineLink = (r.links || {})['*'] || null;
+  // Parts of the other reports a part can be linked to ('*' = the line itself, for a per-office list without parts).
+  const linkOpts = rms.reports.filter((x) => x.id !== id && x.frequency !== 'As needed').sort((a, b) => a.code.localeCompare(b.code))
+    .map((x) => ({ x, parts: x.perOffice && !(x.checklist || []).length ? [['*', 'each ' + (x.lineLabel || 'line').toLowerCase()]] : (x.checklist || []).map((p) => [p, p]) })).filter((g) => g.parts.length);
+  const linkSel = (cur, attr) => `<select class="input link-sel" ${attr} title="Same document as"><option value="">Same document as: —</option>${linkOpts.map((g) => `<optgroup label="${esc(g.x.code + ' · ' + g.x.frequency)}">${g.parts.map(([v, t]) => `<option value="${esc(g.x.id + '::' + v)}" ${cur && cur.reportId === g.x.id && cur.part === v ? 'selected' : ''}>${esc(g.x.code + ' · ' + t)}</option>`).join('')}</optgroup>`).join('')}</select>`;
+  const readLink = (v) => { if (!v) return null; const k = v.indexOf('::'); return { reportId: v.slice(0, k), part: v.slice(k + 2) }; };
   const usedBy = id ? rms.offices.filter((o) => (o.reportIds || []).includes(id)).length : 0;
   let out = null;
   const res = await modal({
@@ -588,40 +602,59 @@ async function editReport(refs, rms, id) {
         <div class="field"><label for="r-due">Due</label><select class="input" id="r-due">
           <option value="after" ${r.due.kind === 'after' ? 'selected' : ''}>Within a number of days after the period ends</option>
           <option value="day" ${r.due.kind === 'day' ? 'selected' : ''}>On a set day of the following period</option>
+          <option value="date" ${r.due.kind === 'date' ? 'selected' : ''}>On a set date (e.g. Feb 14 for annual reports)</option>
           <option value="none" ${r.due.kind === 'none' ? 'selected' : ''}>No set due date</option></select>
-          <div class="rms-due-n"><input class="input" id="r-due-n" type="number" min="1" max="31" value="${esc(r.due.days || r.due.day || 10)}"><span id="r-due-unit" class="hint"></span></div>
+          <div class="rms-due-n"><select class="input" id="r-due-m" style="width:130px">${MONTHS_LONG.map((m, i) => `<option value="${i + 1}" ${(r.due.month || 2) === i + 1 ? 'selected' : ''}>${m}</option>`).join('')}</select><input class="input" id="r-due-n" type="number" min="1" max="31" value="${esc(r.due.days || r.due.day || 10)}"><span id="r-due-unit" class="hint"></span></div>
           <span class="hint">Used to flag late and missing submissions.</span></div></div>
+      <div class="field" id="r-ann-box"><label><input type="checkbox" id="r-ann" ${r.lastByAnnual ? 'checked' : ''}> The last <span id="r-ann-p">quarter</span> of the year is replaced by the annual report (the monitor shows “A”, nothing is expected)</label></div>
       <div class="field rcv-per"><label><input type="checkbox" id="r-per" ${r.perOffice ? 'checked' : ''}> Each office has its own list (e.g. BRS: one line per bank account)</label>
         <div class="rms-due-n" id="r-per-box"><label for="r-line" class="hint">Each line is a</label><input class="input" id="r-line" style="width:200px" value="${esc(r.lineLabel || 'Bank account')}"></div>
         <span class="hint">The office's lines (e.g. the Province's 75 bank accounts) are entered in Office Setup. At receiving, the JO ticks which lines came in.</span></div>
       <div><span class="legend" id="r-items-legend">Checklist (documents that make up this report)</span>
         <div class="list-edit" id="r-items"></div>
-        <span class="hint">During receiving, the receiver ticks which of these were actually submitted.</span></div>
+        <div id="r-line-link"></div>
+        <span class="hint">During receiving, the receiver ticks which of these were actually submitted. <b>Same document as</b>: a part that is also a part of another report (e.g. the Trial Balance in the quarterly report = that month's Trial Balance) counts for both, each against its own due date.</span></div>
       <div class="field"><label><input type="checkbox" id="r-bulk" ${r.bulk ? 'checked' : ''}> Bulk report (e.g. with DVs): always received For Verification, even when an auditor receives it</label></div>
       ${id ? `<div class="field"><label for="r-active">Status</label><select class="input" id="r-active"><option value="yes" ${r.active !== false ? 'selected' : ''}>Active</option><option value="no" ${r.active === false ? 'selected' : ''}>Inactive (no longer required)</option></select>
         ${usedBy ? `<span class="hint">Ticked for ${usedBy} office${usedBy > 1 ? 's' : ''}. A changed code applies to tracking numbers made from now on.</span>` : ''}</div>` : ''}`,
     onOpen: (bg) => {
       const draw = () => {
         const per = $('#r-per', bg) && $('#r-per', bg).checked;
-        $('#r-items', bg).innerHTML = items.map((t, i) => `<div><span class="n">${i + 1}.</span><span class="txt">${esc(t)}</span>
-            ${per ? `<button type="button" class="req-tog ${optional.has(t) ? 'opt' : ''}" data-opt="${i}" title="Click to switch">${optional.has(t) ? 'Optional' : 'Required'}</button>` : ''}
+        keep();
+        $('#r-items', bg).innerHTML = items.map((x, i) => `<div class="rep-item"><span class="n">${i + 1}.</span><input class="input txt" data-it="${i}" value="${esc(x.t)}" aria-label="Document name">
+            ${per ? `<button type="button" class="req-tog ${x.opt ? 'opt' : ''}" data-opt="${i}" title="Click to switch">${x.opt ? 'Optional' : 'Required'}</button>` : ''}
+            ${linkSel(x.link, `data-lk="${i}"`)}
             <button type="button" class="mini" data-up="${i}" ${i ? '' : 'disabled'} aria-label="Move up">↑</button>
             <button type="button" class="mini" data-rm="${i}" aria-label="Remove">×</button></div>`).join('')
           + `<div><input class="input" id="r-new" placeholder="+ Add a document to the checklist, then press Enter"></div>`;
-        $$('[data-rm]', bg).forEach((b) => { b.onclick = () => { items.splice(+b.dataset.rm, 1); draw(); }; });
-        $$('[data-up]', bg).forEach((b) => { b.onclick = () => { const i = +b.dataset.up; [items[i - 1], items[i]] = [items[i], items[i - 1]]; draw(); }; });
-        $$('[data-opt]', bg).forEach((b) => { b.onclick = () => { const t = items[+b.dataset.opt]; if (optional.has(t)) optional.delete(t); else optional.add(t); draw(); }; });
+        $$('[data-rm]', bg).forEach((b) => { b.onclick = () => { keep(); items.splice(+b.dataset.rm, 1); drawn = false; draw(); }; });
+        $$('[data-up]', bg).forEach((b) => { b.onclick = () => { keep(); const i = +b.dataset.up; [items[i - 1], items[i]] = [items[i], items[i - 1]]; drawn = false; draw(); }; });
+        $$('[data-opt]', bg).forEach((b) => { b.onclick = () => { keep(); items[+b.dataset.opt].opt = !items[+b.dataset.opt].opt; drawn = false; draw(); }; });
         const nw = $('#r-new', bg);
-        nw.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = nw.value.trim(); if (v) { items.push(v); draw(); $('#r-new', bg).focus(); } } };
+        nw.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = nw.value.trim(); if (v) { keep(); items.push({ t: v, o: null, opt: false, link: null }); drawn = false; draw(); $('#r-new', bg).focus(); } } };
+        // A per-office list without parts: the line itself may be the same document as another report's.
+        $('#r-line-link', bg).innerHTML = per && !items.length ? `<div class="field"><label>Each ${esc(($('#r-line', bg).value || 'line').toLowerCase())} is the same document as</label>${linkSel(lineLink, 'id="r-lk-line"')}</div>` : '';
+        drawn = true;
       };
+      // Keep what was typed or chosen before redrawing.
+      let drawn = false;
+      const keep = () => { if (!drawn) return; $$('[data-it]', bg).forEach((x) => { items[+x.dataset.it].t = x.value.trim(); }); $$('[data-lk]', bg).forEach((x) => { items[+x.dataset.lk].link = readLink(x.value); });
+        if ($('#r-lk-line', bg)) lineLink = readLink($('#r-lk-line', bg).value); };
+      bg._keep = keep;
+      const annState = () => { const f = $('#r-freq', bg).value; $('#r-ann-box', bg).hidden = !['Quarterly', 'Semi-annual'].includes(f); $('#r-ann-p', bg).textContent = f === 'Quarterly' ? 'quarter' : 'half'; };
+      $('#r-freq', bg).addEventListener('change', annState); annState();
       const perState = () => { const on = $('#r-per', bg).checked; $('#r-per-box', bg).hidden = !on;
         $('#r-items-legend', bg).textContent = on ? 'Checklist for each line (e.g. BRS signed, bank statement, list of outstanding checks). Leave empty to tick each line as a whole.' : 'Checklist (documents that make up this report)'; };
       $('#r-per', bg).onchange = () => { perState(); draw(); }; perState();
-      const dueState = () => { const k = $('#r-due', bg).value; $('.rms-due-n', bg).hidden = k === 'none'; $('#r-due-unit', bg).textContent = k === 'after' ? 'days after the period ends' : 'day of the following period'; };
+      const dueState = () => { const k = $('#r-due', bg).value; $('.rms-due-n', bg).hidden = k === 'none'; $('#r-due-m', bg).hidden = k !== 'date';
+        $('#r-due-unit', bg).textContent = k === 'after' ? 'days after the period ends' : k === 'date' ? '(the first such date after the period ends)' : 'day of the following period'; };
       $('#r-due', bg).onchange = dueState; draw(); dueState();
     },
     buttons: [{ label: 'Cancel', value: null }, { label: 'Save Report', cls: 'primary', value: 'save', check: (bg) => {
-      const pending = $('#r-new', bg).value.trim(); if (pending) items.push(pending);
+      bg._keep();
+      const pending = $('#r-new', bg).value.trim(); if (pending) items.push({ t: pending, o: null, opt: false, link: null });
+      if (items.some((x) => !x.t)) { toast('A document name in the checklist is empty.', 'bad'); return false; }
+      if (new Set(items.map((x) => x.t)).size !== items.length) { toast('Two documents in the checklist have the same name.', 'bad'); return false; }
       const code = $('#r-code', bg).value.trim().toUpperCase().replace(/\s+/g, '');
       if (!/^[A-Z0-9]{1,10}$/.test(code)) { toast('Enter a report code: letters and numbers only, up to 10.', 'bad'); return false; }
       if (rms.reports.some((x) => x.id !== id && x.code === code)) { toast(`Report code ${code} is already used.`, 'bad'); return false; }
@@ -630,15 +663,41 @@ async function editReport(refs, rms, id) {
       if (!per && !items.length) { toast('Add at least one document to the checklist.', 'bad'); return false; }
       const kind = $('#r-due', bg).value, n = parseInt($('#r-due-n', bg).value, 10);
       if (kind !== 'none' && !(n >= 1 && n <= 31)) { toast('Enter the number of days (1 to 31).', 'bad'); return false; }
-      out = { code, name, basis: $('#r-basis', bg).value.trim(), frequency: $('#r-freq', bg).value,
-        due: kind === 'none' ? { kind } : kind === 'after' ? { kind, days: n } : { kind, day: n }, checklist: items, active: id ? $('#r-active', bg).value === 'yes' : true,
-        groupId: $('#r-group', bg).value, bulk: $('#r-bulk', bg).checked, perOffice: per, ...(per ? { lineLabel, optional: items.filter((t) => optional.has(t)) } : {}) };
+      const freq = $('#r-freq', bg).value, links = {};
+      items.forEach((x) => { if (x.link) links[x.t] = x.link; });
+      if (per && !items.length && lineLink) links['*'] = lineLink;
+      out = { code, name, basis: $('#r-basis', bg).value.trim(), frequency: freq,
+        due: kind === 'none' ? { kind } : kind === 'after' ? { kind, days: n } : kind === 'date' ? { kind, month: +$('#r-due-m', bg).value, day: n } : { kind, day: n },
+        checklist: items.map((x) => x.t), active: id ? $('#r-active', bg).value === 'yes' : true,
+        groupId: $('#r-group', bg).value, bulk: $('#r-bulk', bg).checked, perOffice: per, ...(per ? { lineLabel, optional: items.filter((x) => x.opt).map((x) => x.t) } : {}),
+        links, lastByAnnual: ['Quarterly', 'Semi-annual'].includes(freq) && $('#r-ann', bg).checked };
       return true;
     } }]
   });
   if (res !== 'save') return;
-  await store.save('rms_reports', id || newId('rep'), out, by(refs));
+  await store.save('rms_reports', id || newId('rep'), { ...(id ? strip(r) : {}), ...out }, by(refs));
   toast(id ? 'Report saved.' : 'Report added. Teams can now tick it for their offices.', 'ok');
+  // Renamed documents: applied to the records already received and to other reports' links to them.
+  const renames = id ? items.filter((x) => x.o && x.o !== x.t) : [];
+  if (!renames.length) return;
+  const used = rms.items.filter((i) => i.reportId === id && (i.checklist || []).some((c) => renames.some((x) => (c.part || c.item) === x.o)));
+  const links = rms.reports.filter((x) => x.id !== id && Object.values(x.links || {}).some((l) => l && l.reportId === id && renames.some((y) => y.o === l.part)));
+  if (!used.length && !links.length) return;
+  const go = await modal({ title: 'Apply the New Names to Received Records?',
+    body: `<p>Renamed: ${renames.map((x) => `<b>${esc(x.o)}</b> → <b>${esc(x.t)}</b>`).join(', ')}.</p><p>${used.length} received record${used.length === 1 ? '' : 's'} of ${esc(out.code)}${links.length ? ` and the links in ${links.map((x) => esc(x.code)).join(', ')}` : ''} still use the old name. Apply the new name so they keep counting?</p>`,
+    buttons: [{ label: 'Not Now', value: null }, { label: 'Apply to All Records', cls: 'primary', value: 'go' }] });
+  if (go !== 'go') return;
+  const to = (old) => renames.find((x) => x.o === old)?.t;
+  for (const i of used) {
+    const checklist = i.checklist.map((c) => { if (c.part && to(c.part)) return { ...c, part: to(c.part), item: `${c.line} · ${to(c.part)}` }; if (!c.part && to(c.item)) return { ...c, item: to(c.item) }; return c; });
+    const { id: iid, _new: _n, ...data } = i;
+    await saveItem(iid, { ...data, checklist }, by(refs));
+  }
+  for (const x of links) {
+    const nl = Object.fromEntries(Object.entries(x.links).map(([k, l]) => [k, l && l.reportId === id && to(l.part) ? { ...l, part: to(l.part) } : l]));
+    await store.save('rms_reports', x.id, { ...strip(x), links: nl }, by(refs));
+  }
+  toast(`Updated ${used.length + links.length} record${used.length + links.length === 1 ? '' : 's'} with the new names.`, 'ok');
 }
 
 /* ================= Office Setup ================= */

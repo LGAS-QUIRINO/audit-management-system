@@ -53,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-10-21b · PSAO desk · numbers per report (renumberAll)';
+const SCRIPT_VERSION = '2026-10-22 · move to another report · linked documents';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -182,13 +182,15 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
     const unticked = (old.checklist || []).some(function (x, k) { return x.ok && !((d.checklist || [])[k] || {}).ok; });
     // A batch dated earlier than the first submission (back-encoding) may move the date received earlier, never later.
     const recOk = same('receivedAt') || (d.receivedAt && old.receivedAt && String(d.receivedAt) < String(old.receivedAt));
-    if (!same('corrections') || !recOk || !same('period') || !same('submittedBy') || !same('submittedDesignation') || !same('subject') || unticked)
+    if (!same('corrections') || !recOk || !same('period') || !same('reportId') || !same('submittedBy') || !same('submittedDesignation') || !same('subject') || unticked)
       throw new Error('Only the Admin or the SA can correct a received record.');
   }
   const decided = function (x) { return x && x.decision ? JSON.stringify(x.decision) : ''; };
   if (!decider && (decided(d) !== decided(old) || ((d.status === 'accepted' || d.status === 'rejected') && (!old || old.status !== d.status))))
     throw new Error('Only an auditor (ATL, Team Member, SA or Admin) can accept or reject.');
-  if (old && old.trackingNo) { d.trackingNo = old.trackingNo; d.series = old.series; d.trackingYear = old.trackingYear; d.seriesKey = old.seriesKey; return; }
+  // Moved to another report (Admin or SA): a new number in the new report's series; the old one stays in the history.
+  const moved = old && corrector && d.reportId && old.reportId && d.reportId !== old.reportId;
+  if (old && old.trackingNo && !moved) { d.trackingNo = old.trackingNo; d.series = old.series; d.trackingYear = old.trackingYear; d.seriesKey = old.seriesKey; return; }
   if (!d.trackingNo) return;
   const year = Number(d.trackingYear) || new Date().getFullYear(), key = d.seriesKey || d.officeId;
   let n = 0;
