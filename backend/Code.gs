@@ -53,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-10-22 · move to another report · linked documents';
+const SCRIPT_VERSION = '2026-10-22b · move to another report · linked documents · renumber with current codes';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -204,7 +204,7 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
 }
 
 /* ---------- one-time: renumber the tracking numbers (21 Oct 2026) ---------- */
-// Run once from the Apps Script editor (choose renumberAll, then Run). Every received report gets a number in its own
+// Run from the Apps Script editor (choose renumberAll, then Run). Also after changing a report code or an office code. Every received report gets a number in its own
 // series per office, per report and per year, in the order received: PGQ-OPAC-FS-2026-0001, -0002, …
 // Communications from an office: one series per office per year (from outside: OUT-2026-0001 …).
 // Outgoing records that mention an old number ("related") are updated. The list of old → new numbers is written to the log
@@ -217,10 +217,17 @@ function renumberAll() {
     const w = Math.max(HEAD.length, sh.getLastColumn());
     const all = sh.getRange(2, 1, n - 1, w).getValues().map(function (r, i) { return { row: i + 2, rec: r[0] ? rec_(r) : null }; })
       .filter(function (x) { return x.rec && !x.rec.deleted && x.rec.data; });
+    // The current report codes (Report Library) and office codes (Office Setup): a code changed later (e.g. FS → TB)
+    // is given to the records already received.
+    const repCode = {}, offCode = {};
+    readAll_('rms_reports').forEach(function (r) { if (!r.deleted && r.data && r.data.code) repCode[r.id] = r.data.code; });
+    readAll_('rms_offices').forEach(function (r) { if (!r.deleted && r.data && r.data.code) offCode[r.id] = r.data.code; });
     const groups = {};
     all.forEach(function (x) {
       const d = x.rec.data;
       if (!d.trackingNo || ['out', 'psao-in', 'psao-out'].indexOf(d.kind) >= 0) return;
+      if (d.kind !== 'comm' && repCode[d.reportId] && repCode[d.reportId] !== d.reportCode) { d.reportCode = repCode[d.reportId]; x.codeChanged = true; }
+      if (d.officeId && offCode[d.officeId] && offCode[d.officeId] !== d.officeCode) { d.officeCode = offCode[d.officeId]; x.codeChanged = true; }
       const key = d.kind === 'comm' ? (d.officeId || 'outside') : d.officeId + '|' + d.reportCode;
       const g = key + '#' + d.trackingYear;
       (groups[g] = groups[g] || { key: key, list: [] }).list.push(x);
@@ -235,7 +242,7 @@ function renumberAll() {
         const d = x.rec.data, s = i + 1;
         const code = d.kind === 'comm' && !d.officeId ? 'OUT' : d.officeCode;
         const no = [code, d.kind === 'comm' ? '' : d.reportCode, d.trackingYear, ('000' + s).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
-        if (no === d.trackingNo && d.series === s && d.seriesKey === grp.key) return;
+        if (no === d.trackingNo && d.series === s && d.seriesKey === grp.key && !x.codeChanged) return;
         if (no !== d.trackingNo) map[d.trackingNo] = no;
         d.trackingNo = no; d.series = s; d.seriesKey = grp.key;
         dirty.push(x);
