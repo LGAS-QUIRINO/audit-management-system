@@ -62,6 +62,9 @@ async function loadRms() {
     groups: (groups && groups.data && groups.data.list) || [],
     startPeriod: (settings && settings.data && settings.data.startPeriod) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
 }
+// The tab name of the per-line view, from the report's "Each line is a" (BRS → By Bank Account, TB → By Office).
+const titleCase = (t) => String(t || 'Line').trim().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+export const byLineTab = (r) => 'By ' + titleCase(r && r.lineLabel);
 const dueText = (r) => !r.due || r.due.kind === 'none' ? 'No set due date'
   : r.due.kind === 'after' ? `${r.due.days} days after the period ends`
   : r.due.kind === 'date' ? `${MONTHS_LONG[(r.due.month || 1) - 1]} ${r.due.day} after the period ends` : `Day ${r.due.day} of the following period`;
@@ -369,8 +372,8 @@ function acctHtml(refs, rms, q, ctx) {
       <label>Report<select class="input" data-f="r">${per.map((x) => `<option value="${x.id}" ${x.id === r.id ? 'selected' : ''}>${esc(x.code + ' · ' + x.name)}</option>`).join('')}</select></label>
       <label>Office<select class="input" data-f="o"><option value="all">All offices</option>${offs.map((o) => `<option value="${o.id}" ${o.id === oid ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>
       <label>Year<select class="input" data-f="y">${[now.getFullYear(), now.getFullYear() - 1].map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
-      <label>Search<input class="input" id="acct-find" placeholder="e.g. DPWH, TF, 0732-1080"></label>
-      <div class="seg"><a href="${qs({ v: 'month' })}">By Period</a><a href="${qs({ v: 'report' })}">By Report</a><a href="${qs({ v: 'acct' })}" class="on">By Bank Account</a></div>
+      <label>Search<input class="input" id="acct-find" placeholder="Search ${esc(String(r.lineLabel || 'line').toLowerCase())}s"></label>
+      <div class="seg"><a href="${qs({ v: 'month' })}">By Period</a><a href="${qs({ v: 'report' })}">By Report</a><a href="${qs({ v: 'acct' })}" class="on">${esc(byLineTab(r))}</a></div>
     </div>
     <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
     ${shownOffs.length ? `<div class="mon-wrap"><table class="mon acct"><thead><tr><th>${esc(r.lineLabel || 'Account')}</th>${ps.map((p) => `<th>${esc(periodShort(p))}</th>`).join('')}<th>Months</th></tr></thead><tbody>${body}</tbody></table></div>`
@@ -418,7 +421,7 @@ function monitorHtml(refs, rms, q) {
   const tally = {}; grid.forEach((g) => g.cs.forEach((x) => { if (x.st) tally[x.st.s] = (tally[x.st.s] || 0) + 1; }));
   const qs = (patch) => { const o = { ...(tf !== 'all' ? { t: tf } : {}), m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...(q.get('o') ? { o: q.get('o') } : {}), ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
   const years = [now.getFullYear(), now.getFullYear() - 1];
-  if (mode === 'acct') return `<div class="hello"><div><h1>Submission Monitor</h1><p>Per bank account: which months came in. Click a cell to see its details.</p></div>
+  if (mode === 'acct') return `<div class="hello"><div><h1>Submission Monitor</h1><p>Per ${esc(String(r.lineLabel || 'line').toLowerCase())}: which months came in. Click a cell to see its details.</p></div>
       <button class="btn" type="button" id="mon-print">Print</button></div>
     <section class="panel">${acctHtml(refs, rms, q, { scopes, scopeId, year, r, reports, label, qs, teamSel })}</section>
     <section class="panel" id="cell-detail" hidden></section>`;
@@ -432,7 +435,7 @@ function monitorHtml(refs, rms, q) {
           : `<label>Month<select class="input" data-f="mo">${MONTHS_LONG.map((m, i) => `<option value="${i + 1}" ${i + 1 === month ? 'selected' : ''}>${m}</option>`).join('')}</select></label>`}
         <label>Year<select class="input" data-f="y">${years.map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
         <label>Show<select class="input" data-f="show"><option value="all">All offices</option><option value="overdue" ${show === 'overdue' ? 'selected' : ''}>With overdue only</option><option value="verify" ${show === 'verify' ? 'selected' : ''}>For verification only</option><option value="incomplete" ${show === 'incomplete' ? 'selected' : ''}>Missing documents only</option></select></label>
-        <div class="seg"><a href="${qs({ v: 'month' })}" class="${mode === 'month' ? 'on' : ''}">By Period</a><a href="${qs({ v: 'report' })}" class="${mode === 'report' ? 'on' : ''}">By Report</a>${hasPer ? `<a href="${qs({ v: 'acct', r: (r && r.perOffice ? r.id : firstPer.id) })}">By Bank Account</a>` : ''}</div>
+        <div class="seg"><a href="${qs({ v: 'month' })}" class="${mode === 'month' ? 'on' : ''}">By Period</a><a href="${qs({ v: 'report' })}" class="${mode === 'report' ? 'on' : ''}">By Report</a>${hasPer ? `<a href="${qs({ v: 'acct', r: (r && r.perOffice ? r.id : firstPer.id) })}">${esc(byLineTab(r && r.perOffice ? r : firstPer))}</a>` : ''}</div>
       </div>
       <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
       ${shown.length ? `<div class="mon-wrap"><table class="mon"><thead>${groupRow}<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr></thead><tbody>
