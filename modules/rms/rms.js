@@ -116,7 +116,7 @@ function cellStatus(rms, office, r, p, now = new Date()) {
   // Documents that came in with a linked report count too; on their own they only show once they complete the period.
   const recs = periodRecs(rms, office.id, r.id, p);
   const due = dueDate(r, p);
-  if (recs.length && (recs.some((x) => !x.virtual) || periodState(recs).done)) {
+  if (recs.length && (recs.some((x) => !x.virtual || x.contained) || periodState(recs).done)) {
     const agg = periodState(recs), got = recs[recs.length - 1];
     if (agg.verify) return { s: 'verify', item: got, agg, due };
     if (!agg.done) return { s: 'incomplete', item: got, agg, due };
@@ -338,7 +338,7 @@ function acctStatus(rms, office, r, p, line, now = new Date()) {
   const due = dueDate(r, p), recs = periodRecs(rms, office.id, r.id, p);
   const ents = recs.length ? periodState(recs).checklist.filter((c) => c.line === line) : [];
   const mine = recs.filter((x) => (x.checklist || []).some((c) => c.line === line && (c.ok || c.na)));
-  if (mine.length && (mine.some((x) => !x.virtual) || ents.every(isIn))) {
+  if (mine.length && (mine.some((x) => !x.virtual || x.contained) || ents.every(isIn))) {
     if (mine.some(isVerify)) return { s: 'verify', due, recs: mine, ents };
     if (!ents.every(isIn)) return { s: 'incomplete', due, recs: mine, ents };
     const done = ents.filter((c) => c.ok && !c.optional).reduce((m, c) => (c.at > m ? c.at : m), '');

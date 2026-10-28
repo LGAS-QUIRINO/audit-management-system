@@ -101,7 +101,10 @@ function linkedRecs(rms, officeId, reportId, period) {
         any = true;
         return hit.c.ok ? { ...e, ok: true, at: hit.c.at || src.receivedAt } : { ...e, ok: false, na: true };
       });
-      if (any) out.push({ id: 'via-' + src.id, virtual: true, kind: 'report', officeId, reportId, reportCode: R.code, period, viaCode: S.code, viaPeriod: src.period,
+      // contained: the document came inside a longer report (e.g. the March TB inside the Q1 QFR), so it was really
+      // submitted for this period and counts like a transmittal of its own.
+      const len = (p) => { const [, a, b] = span(p); return b - a + 1; };
+      if (any) out.push({ id: 'via-' + src.id, virtual: true, contained: len(src.period) > len(period), kind: 'report', officeId, reportId, reportCode: R.code, period, viaCode: S.code, viaPeriod: src.period,
         status: src.status, receivedAt: src.receivedAt, receivedByName: src.receivedByName, trackingNo: src.trackingNo, checklist, ...(R.lineLabel && R.perOffice ? { lineLabel: R.lineLabel } : {}) });
     });
   });
