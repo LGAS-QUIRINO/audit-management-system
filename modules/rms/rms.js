@@ -5,6 +5,7 @@ import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
+import { download } from './export.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
 import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem } from './receiving.js';
 
@@ -333,6 +334,7 @@ const countOf = (x) => { const agg = x.st && x.st.agg; if (!agg || !x.c.r.perOff
 // part missing) · overdue / notdue / nodue (nothing submitted for that account) · untracked (before monitoring).
 function acctStatus(rms, office, r, p, line, now = new Date()) {
   { const [y, , e] = span(p); if (`${y}-${String(e).padStart(2, '0')}` < rms.startPeriod) return { s: 'untracked' }; }
+  if (byAnnual(r, p)) return { s: 'annual' };
   const due = dueDate(r, p), recs = periodRecs(rms, office.id, r.id, p);
   const ents = recs.length ? periodState(recs).checklist.filter((c) => c.line === line) : [];
   const mine = recs.filter((x) => (x.checklist || []).some((c) => c.line === line && (c.ok || c.na)));
@@ -346,6 +348,56 @@ function acctStatus(rms, office, r, p, line, now = new Date()) {
   if (!due) return { s: new Date(y, b, 0) < now ? 'nodue' : 'notdue', due, recs: [], ents };
   return { s: now > due ? 'overdue' : 'notdue', due, recs: [], ents };
 }
+/* ---------- Show: Summary / one period / All, with the documents under each period ---------- */
+const UNIT = { Monthly: 'Months', Quarterly: 'Quarters', 'Semi-annual': 'Halves', Annual: 'Years' };
+const unitOf = (r) => UNIT[r.frequency] || 'Periods';
+// The documents of a report shown as columns (for a per-office list: its parts).
+const docsOf = (r) => (r.checklist || []).map((t) => ({ key: t, name: t, opt: (r.optional || []).includes(t) }));
+// Short column names: short names stay; long ones become initials (Statement of Financial Position → SFP),
+// with more letters when two would look the same (SFPos / SFPer).
+function shortNames(docs) {
+  const small = new Set(['of', 'the', 'and', 'to', 'for', 'in', 'on', 'with', 'a', 'an', '&']);
+  const ini = (n) => n.split(/[\s/–-]+/).filter((w) => w && !small.has(w.toLowerCase())).map((w) => w[0].toUpperCase()).join('');
+  const out = docs.map((d) => (d.name.length <= 12 ? d.name : ini(d.name)));
+  const dup = out.map((a) => out.filter((x) => x === a).length > 1);
+  return out.map((a, i) => { if (!dup[i]) return a; const ws = docs[i].name.split(/\s+/); return a + ws[ws.length - 1].slice(1, 4).toLowerCase(); });
+}
+// One document of one period: ✓ on time · L late · V for verification · – N/A · ✗ missing (red once overdue) · · not yet due / optional.
+function docMark(st, e, doc, now) {
+  if (!st || st.s === 'untracked') return { c: 'untracked', m: '—', t: 'Before monitoring started' };
+  if (st.s === 'annual') return { c: 'annual', m: 'A', t: 'Replaced by the annual report' };
+  if (e && e.ok) {
+    if (st.s === 'verify') return { c: 'verify', m: 'V', t: 'Received ' + fmtDate(e.at) + ', for verification' };
+    return st.due && new Date(e.at) > st.due ? { c: 'late', m: 'L', t: 'Received late, ' + fmtDate(e.at) } : { c: 'complete', m: '✓', t: 'Received ' + fmtDate(e.at) };
+  }
+  if (e && e.na) return { c: 'complete', m: '–', t: 'Not applicable' };
+  if ((e && e.optional) || doc.opt) return { c: 'notdue', m: '·', t: 'Optional, not attached' };
+  if (st.due && now > st.due) return { c: 'overdue', m: '✗', t: 'Missing, overdue' };
+  if (['incomplete', 'verify', 'nodue'].includes(st.s)) return { c: 'incomplete', m: '✗', t: 'Missing' };
+  return { c: 'notdue', m: '·', t: 'Not yet due' };
+}
+// The Show choice: 'sum', one period (e.g. 2026-Q1) or 'all'. Remembered on this computer.
+function showOf(q, ps) {
+  let v = q.get('d');
+  if (!v) { try { v = localStorage.getItem('rms-mon-show') || 'sum'; } catch (e) { v = 'sum'; } }
+  return v === 'all' || ps.includes(v) ? v : 'sum';
+}
+function showBar(ps, show, qs, docs) {
+  if (!docs.length) return '';
+  const one = ps.includes(show) ? show : '';
+  return `<label>Show<div class="seg show-seg"><a href="${qs({ d: 'sum' })}" class="${show === 'sum' ? 'on' : ''}" data-keep="sum">Summary</a>
+    <select class="${one ? 'on' : ''}" data-show-sel aria-label="One period">${one ? '' : '<option value="">Pick ▾</option>'}${ps.map((p) => `<option value="${p}" ${p === one ? 'selected' : ''}>${esc(periodShort(p))}</option>`).join('')}</select>
+    <a href="${qs({ d: 'all' })}" class="${show === 'all' ? 'on' : ''}" data-keep="all">All</a></div></label>`;
+}
+// The column headings: one row (Summary) or two rows (periods, then their documents).
+function headRows(first, cols, docs, show, unit, extra = '') {
+  if (show === 'sum') return `<tr><th>${first}</th>${cols.map((c) => `<th class="q" data-goper="${esc(c.p)}" title="Click to see the documents of ${esc(c.head)}">${esc(c.head)}</th>`).join('')}${unit ? `<th>${esc(unit)}</th>` : ''}${extra}</tr>`;
+  const sn = shortNames(docs);
+  return `<tr><th rowspan="2">${first}</th>${cols.map((c) => `<th colspan="${docs.length}" class="pgrp">${esc(c.head)}</th>`).join('')}${unit ? `<th rowspan="2">${esc(unit)}</th>` : ''}</tr>
+    <tr class="docs">${cols.map(() => docs.map((d, k) => `<th title="${esc(d.name)}${d.opt ? ' (optional)' : ''}">${esc(sn[k])}${d.opt ? '*' : ''}</th>`).join('')).join('')}</tr>`;
+}
+const docKey = (docs) => { const sn = shortNames(docs); return docs.some((d, k) => sn[k] !== d.name) ? `<div class="note doc-key">${docs.map((d, k) => sn[k] !== d.name ? `<b>${esc(sn[k])}</b> ${esc(d.name)}` : '').filter(Boolean).join(' · ')}${docs.some((d) => d.opt) ? ' · * optional' : ''}</div>` : (docs.some((d) => d.opt) ? '<div class="note doc-key">* optional</div>' : ''); };
+
 function acctHtml(refs, rms, q, ctx) {
   const { scopes, scopeId, year, r, reports, label, qs, teamSel } = ctx;
   const now = new Date();
@@ -354,31 +406,56 @@ function acctHtml(refs, rms, q, ctx) {
     .filter((o) => (o.reportIds || []).includes(r.id) && ((o.lists || {})[r.id] || []).length);
   const oid = offs.some((o) => o.id === q.get('o')) ? q.get('o') : 'all';
   const shownOffs = oid === 'all' ? offs : offs.filter((o) => o.id === oid);
-  const ps = periodsOf(r, year);
+  const allPs = periodsOf(r, year);
+  const docs = docsOf(r), show = docs.length ? showOf(q, allPs) : 'sum';
+  const ps = show === 'sum' || show === 'all' ? allPs : [show];
+  const width = show === 'sum' ? ps.length + 2 : ps.length * docs.length + 2;
   const tally = {};
   const body = shownOffs.map((o) => {
     const lines = o.lists[r.id];
-    return `<tr class="acct-off" data-off="${esc(o.id)}"><th colspan="${ps.length + 2}">${esc(o.label)} <small class="mono">${esc(o.code || '')}</small> · ${lines.length} ${esc(((r.lineLabel || 'account') + 's').toLowerCase())}</th></tr>`
+    return `<tr class="acct-off" data-off="${esc(o.id)}"><th colspan="${width}">${esc(o.label)} <small class="mono">${esc(o.code || '')}</small> · ${lines.length} ${esc(((r.lineLabel || 'account') + 's').toLowerCase())}</th></tr>`
       + lines.map((line, li) => {
-        const cs = ps.map((p) => { const st = acctStatus(rms, o, r, p, line, now); tally[st.s] = (tally[st.s] || 0) + 1; return { p, st }; });
-        const dueN = cs.filter((x) => !['untracked', 'notdue'].includes(x.st.s)).length, okN = cs.filter((x) => ['complete', 'late'].includes(x.st.s)).length;
-        return `<tr data-off="${esc(o.id)}" data-find="${esc((line + ' ' + o.label).toLowerCase())}"><th>${esc(line)}</th>
-          ${cs.map((x) => `<td class="c ${x.st.s}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}</td>`).join('')}
+        const cs = allPs.map((p) => { const st = acctStatus(rms, o, r, p, line, now); return { p, st }; });
+        cs.filter((x) => ps.includes(x.p)).forEach((x) => { tally[x.st.s] = (tally[x.st.s] || 0) + 1; });
+        const dueN = cs.filter((x) => !['untracked', 'notdue', 'annual'].includes(x.st.s)).length, okN = cs.filter((x) => ['complete', 'late'].includes(x.st.s)).length;
+        const cells = cs.filter((x) => ps.includes(x.p)).map((x) => show === 'sum'
+          ? `<td class="c ${x.st.s}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}</td>`
+          : docs.map((d) => { const e = (x.st.ents || []).find((c) => c.part === d.key), m = docMark(x.st, e, d, now);
+              return `<td class="c dc ${m.c}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" title="${esc(d.name + ': ' + m.t)}">${m.m}</td>`; }).join('')).join('');
+        return `<tr data-off="${esc(o.id)}" data-find="${esc((line + ' ' + o.label).toLowerCase())}"><th>${esc(line)}</th>${cells}
           <td class="acct-n"><small>${okN} of ${dueN}</small></td></tr>`;
       }).join('');
   }).join('');
+  const cols = ps.map((p) => ({ p, head: periodShort(p) }));
   return `<div class="mon-filters">${teamSel}
       <label>Municipality<select class="input" data-f="m"><option value="all">All my municipalities</option>${scopes.map((s) => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
       <label>Report<select class="input" data-f="r">${per.map((x) => `<option value="${x.id}" ${x.id === r.id ? 'selected' : ''}>${esc(x.code + ' · ' + x.name)}</option>`).join('')}</select></label>
       <label>Office<select class="input" data-f="o"><option value="all">All offices</option>${offs.map((o) => `<option value="${o.id}" ${o.id === oid ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label>
       <label>Year<select class="input" data-f="y">${[now.getFullYear(), now.getFullYear() - 1].map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+      ${showBar(allPs, show, qs, docs)}
       <label>Search<input class="input" id="acct-find" placeholder="Search ${esc(String(r.lineLabel || 'line').toLowerCase())}s"></label>
       <div class="seg"><a href="${qs({ v: 'month' })}">By Period</a><a href="${qs({ v: 'report' })}">By Report</a><a href="${qs({ v: 'acct' })}" class="on">${esc(byLineTab(r))}</a></div>
     </div>
     <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
-    ${shownOffs.length ? `<div class="mon-wrap"><table class="mon acct"><thead><tr><th>${esc(r.lineLabel || 'Account')}</th>${ps.map((p) => `<th>${esc(periodShort(p))}</th>`).join('')}<th>Months</th></tr></thead><tbody>${body}</tbody></table></div>`
+    ${shownOffs.length ? `<div class="mon-wrap"><table class="mon acct${show === 'sum' ? '' : ' withdocs'}"><thead>${headRows(esc(r.lineLabel || 'Account'), cols, docs, docs.length ? show : 'sum', unitOf(r))}</thead><tbody>${body}</tbody></table></div>${show === 'sum' ? '' : docKey(docs)}`
       : `<div class="empty"><b>No ${esc(((r.lineLabel || 'account') + 's').toLowerCase())} listed yet</b>Add each office's list in Office Setup (${esc(r.code)}).</div>`}
-    <div class="note">Per ${esc((r.lineLabel || 'account').toLowerCase())}, over all transmittals of each month. ✓ all required parts in · L in but late · V in a transmittal still for verification · M a required part missing · ! not submitted and overdue · · not yet due. "Months" = complete months of those already due.</div>`;
+    <div class="note">Per ${esc((r.lineLabel || 'account').toLowerCase())}, over all transmittals of each month. ✓ all required parts in · L in but late · V in a transmittal still for verification · M a required part missing · ! not submitted and overdue · · not yet due. "${esc(unitOf(r))}" = complete ${esc(unitOf(r).toLowerCase())} of those already due.${docs.length ? ' Show a period or All to see each document; click a heading to open it.' : ''}</div>`;
+}
+
+// By Period with documents: one document of one office for one period. For a per-office list with parts (e.g. BRS),
+// how many lines have that part (e.g. 40/47).
+function periodDocMark(o, x, d, now) {
+  const st = x.st, r = x.c.r;
+  if (['untracked', 'annual'].includes(st.s)) return docMark(st, null, d, now);
+  const ck = (st.agg && st.agg.checklist) || [];
+  if (!r.perOffice) return docMark(st, ck.find((c) => c.item === d.key), d, now);
+  const total = ((o.lists || {})[r.id] || []).length;
+  if (!total) return { c: 'notdue', m: '—', t: 'No lines listed in Office Setup' };
+  const es = ck.filter((c) => c.part === d.key), n = es.filter((c) => c.ok || c.na).length;
+  if (n === total) { const late = st.due && es.some((c) => c.ok && new Date(c.at) > st.due); return { c: st.s === 'verify' ? 'verify' : late ? 'late' : 'complete', m: '✓', t: `All ${total} in` + (late ? ', some late' : '') }; }
+  if (d.opt) return { c: 'notdue', m: n ? `${n}/${total}` : '·', t: `Optional: ${n} of ${total} attached` };
+  const m = docMark(st, null, d, now);
+  return { c: m.c === 'notdue' && n ? 'incomplete' : m.c, m: n ? `${n}/${total}` : m.m, t: `${n} of ${total} in` };
 }
 
 function monitorHtml(refs, rms, q) {
@@ -408,7 +485,11 @@ function monitorHtml(refs, rms, q) {
   const offs = visibleOffices(refs, rms, scopeIds);
   const label = (s) => s.data.kind === 'province' ? 'Province of Quirino' : s.data.name;
   // Columns: periods of one report (By Month) or the reports for one month (By Report).
-  const columns = mode === 'month' ? periodsOf(r, year).map((p) => ({ key: p, head: periodShort(p), r, p }))
+  // By Period: Show Summary / one period / All (the documents under each period).
+  const allPs = mode === 'month' ? periodsOf(r, year) : [];
+  const docs = mode === 'month' && (!r.perOffice || (r.checklist || []).length) ? docsOf(r) : [];
+  const disp = docs.length ? showOf(q, allPs) : 'sum';
+  const columns = mode === 'month' ? allPs.filter((p) => disp === 'sum' || disp === 'all' || p === disp).map((p) => ({ key: p, head: periodShort(p), r, p }))
     : reports.map((x) => ({ key: x.id, head: x.code, r: x, p: periodsOf(x, year).find((p) => { const [, a, b] = span(p); return month >= a && month <= b; }) }));
   let rows = offs.filter((o) => columns.some((c) => (o.reportIds || []).includes(c.r.id)));
   const cells = (o) => columns.map((c) => (o.reportIds || []).includes(c.r.id) && c.p ? { c, st: cellStatus(rms, o, c.r, c.p, now) } : { c, st: null });
@@ -419,29 +500,31 @@ function monitorHtml(refs, rms, q) {
     const spans = []; columns.forEach((c) => { const n = groupName(rms, c.r) || 'No group'; const last = spans[spans.length - 1]; if (last && last.n === n) last.k++; else spans.push({ n, k: 1 }); });
     return `<tr class="grp"><th></th>${spans.map((x) => `<th colspan="${x.k}">${esc(x.n)}</th>`).join('')}</tr>`; })() : '';
   const tally = {}; grid.forEach((g) => g.cs.forEach((x) => { if (x.st) tally[x.st.s] = (tally[x.st.s] || 0) + 1; }));
-  const qs = (patch) => { const o = { ...(tf !== 'all' ? { t: tf } : {}), m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...(q.get('o') ? { o: q.get('o') } : {}), ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
+  const qs = (patch) => { const o = { ...(tf !== 'all' ? { t: tf } : {}), ...(q.get('d') ? { d: q.get('d') } : {}), m: scopeId, r: rid, y: year, v: mode, mo: month, show, ...(q.get('o') ? { o: q.get('o') } : {}), ...patch }; return '#/rms/monitor?' + Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&'); };
   const years = [now.getFullYear(), now.getFullYear() - 1];
-  if (mode === 'acct') return `<div class="hello"><div><h1>Submission Monitor</h1><p>Per ${esc(String(r.lineLabel || 'line').toLowerCase())}: which months came in. Click a cell to see its details.</p></div>
-      <button class="btn" type="button" id="mon-print">Print</button></div>
+  if (mode === 'acct') return `<div class="hello"><div><h1>Submission Monitor</h1><p>Per ${esc(String(r.lineLabel || 'line').toLowerCase())}: which ${esc(unitOf(r).toLowerCase())} came in. Click a cell to see its details.</p></div>
+      <div class="btn-row"><button class="btn" type="button" id="mon-print">Print</button><div class="dl-wrap"><button class="btn" type="button" id="mon-dl" aria-haspopup="true">Download ▾</button><div class="dl-menu" id="mon-dl-menu" hidden><button type="button" data-dl="pdf">PDF</button><button type="button" data-dl="xlsx">Excel</button><button type="button" data-dl="docx">Word</button></div></div></div></div>
     <section class="panel">${acctHtml(refs, rms, q, { scopes, scopeId, year, r, reports, label, qs, teamSel })}</section>
     <section class="panel" id="cell-detail" hidden></section>`;
   const hasPer = reports.some((x) => x.perOffice);
   return `<div class="hello"><div><h1>Submission Monitor</h1><p>Which office submitted what, period by period. Click a cell to see its details.</p></div>
-      <button class="btn" type="button" id="mon-print">Print</button></div>
+      <div class="btn-row"><button class="btn" type="button" id="mon-print">Print</button><div class="dl-wrap"><button class="btn" type="button" id="mon-dl" aria-haspopup="true">Download ▾</button><div class="dl-menu" id="mon-dl-menu" hidden><button type="button" data-dl="pdf">PDF</button><button type="button" data-dl="xlsx">Excel</button><button type="button" data-dl="docx">Word</button></div></div></div></div>
     <section class="panel">
       <div class="mon-filters">${teamSel}
         <label>Municipality<select class="input" data-f="m"><option value="all">All my municipalities</option>${scopes.map((s) => `<option value="${s.id}" ${s.id === scopeId ? 'selected' : ''}>${esc(label(s))}</option>`).join('')}</select></label>
         ${mode === 'month' ? `<label>Report<select class="input" data-f="r">${groupedOptions(rms, reports, rid)}</select></label>`
           : `<label>Month<select class="input" data-f="mo">${MONTHS_LONG.map((m, i) => `<option value="${i + 1}" ${i + 1 === month ? 'selected' : ''}>${m}</option>`).join('')}</select></label>`}
         <label>Year<select class="input" data-f="y">${years.map((y) => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
-        <label>Show<select class="input" data-f="show"><option value="all">All offices</option><option value="overdue" ${show === 'overdue' ? 'selected' : ''}>With overdue only</option><option value="verify" ${show === 'verify' ? 'selected' : ''}>For verification only</option><option value="incomplete" ${show === 'incomplete' ? 'selected' : ''}>Missing documents only</option></select></label>
+        ${mode === 'month' ? showBar(allPs, disp, qs, docs) : ''}
+        <label>Offices<select class="input" data-f="show"><option value="all">All offices</option><option value="overdue" ${show === 'overdue' ? 'selected' : ''}>With overdue only</option><option value="verify" ${show === 'verify' ? 'selected' : ''}>For verification only</option><option value="incomplete" ${show === 'incomplete' ? 'selected' : ''}>Missing documents only</option></select></label>
         <div class="seg"><a href="${qs({ v: 'month' })}" class="${mode === 'month' ? 'on' : ''}">By Period</a><a href="${qs({ v: 'report' })}" class="${mode === 'report' ? 'on' : ''}">By Report</a>${hasPer ? `<a href="${qs({ v: 'acct', r: (r && r.perOffice ? r.id : firstPer.id) })}">${esc(byLineTab(r && r.perOffice ? r : firstPer))}</a>` : ''}</div>
       </div>
       <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
-      ${shown.length ? `<div class="mon-wrap"><table class="mon"><thead>${groupRow}<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr></thead><tbody>
-        ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small>${multi && tf === 'all' ? `<small> · ${esc(refs.team[g.o.teamId]?.data.name || '')}</small>` : ''}</th>${g.cs.map((x) => x.st
-          ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}${countOf(x)}</td>` : '<td class="c na"></td>').join('')}</tr>`).join('')}
-        </tbody></table></div>`
+      ${shown.length ? `<div class="mon-wrap"><table class="mon${disp === 'sum' ? '' : ' withdocs'}"><thead>${groupRow}${mode === 'month' ? headRows('Office · Code', columns, docs, disp, '') : `<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr>`}</thead><tbody>
+        ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small>${multi && tf === 'all' ? `<small> · ${esc(refs.team[g.o.teamId]?.data.name || '')}</small>` : ''}</th>${g.cs.map((x) => !x.st ? (disp === 'sum' ? '<td class="c na"></td>' : docs.map(() => '<td class="c na"></td>').join(''))
+          : disp === 'sum' ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}${countOf(x)}</td>`
+          : docs.map((d) => { const m = periodDocMark(g.o, x, d, now); return `<td class="c dc ${m.c}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(d.name + ': ' + m.t)}">${m.m}</td>`; }).join('')).join('')}</tr>`).join('')}
+        </tbody></table></div>${disp === 'sum' ? '' : docKey(docs)}`
         : `<div class="empty"><b>${rows.length ? 'Nothing to show for this filter' : 'No office submits this report yet'}</b>${rows.length ? 'Try Show: All offices.' : 'Tick the report for the offices in Office Setup.'}</div>`}
       <div class="note">Monitoring starts with ${esc(periodLabel(rms.startPeriod))}; earlier periods show “—”. ${mode === 'month' ? esc(r.code + ' is ' + r.frequency.toLowerCase() + ', due ' + dueText(r).toLowerCase() + '.') : 'Quarterly, semi-annual and annual reports show the period that includes the chosen month.'}</div>
     </section>
@@ -452,6 +535,22 @@ function wireMonitor(refs, rms, q) {
   $$('[data-f]').forEach((s) => { s.onchange = () => {
     const p = new URLSearchParams(location.hash.split('?')[1] || ''); p.set(s.dataset.f, s.value); location.hash = '#/rms/monitor?' + p.toString(); }; });
   const pr = $('#mon-print'); if (pr) pr.onclick = () => window.print();
+  // Download ▾ PDF / Excel / Word of what is on screen.
+  const dl = $('#mon-dl'), menu = $('#mon-dl-menu');
+  if (dl) {
+    dl.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+    if (!window.__rmsDlClose) { window.__rmsDlClose = true; document.addEventListener('click', () => { const m = document.getElementById('mon-dl-menu'); if (m) m.hidden = true; }); }
+    $$('[data-dl]', menu).forEach((b) => { b.onclick = async () => {
+      menu.hidden = true; const t = $('table.mon'); if (!t) return toast('Nothing to download for this filter.', 'bad');
+      toast('Preparing the ' + b.textContent + ' file…');
+      try { await download(b.dataset.dl, t); toast(b.textContent + ' file downloaded.', 'ok'); } catch (err) { toast('Could not make the file: ' + err.message, 'bad'); } }; });
+  }
+  // Show: Summary / one period / All (remembered on this computer). A period heading in Summary opens that period.
+  const setShow = (v) => { try { localStorage.setItem('rms-mon-show', v); } catch (e) { /* ignore */ }
+    const p = new URLSearchParams(location.hash.split('?')[1] || ''); p.set('d', v); location.hash = '#/rms/monitor?' + p.toString(); };
+  $$('[data-goper]').forEach((th) => { th.onclick = () => setShow(th.dataset.goper); });
+  const ss = $('[data-show-sel]'); if (ss) ss.onchange = () => { if (ss.value) setShow(ss.value); };
+  $$('[data-keep]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); setShow(a.dataset.keep); }; });
   // By Bank Account: search, and the details of one account for one month.
   const af = $('#acct-find'); if (af) af.oninput = () => { const v = af.value.trim().toLowerCase();
     $$('table.acct tbody tr[data-find]').forEach((tr) => { tr.hidden = v && !v.split(/\s+/).every((w) => tr.dataset.find.includes(w)); });
