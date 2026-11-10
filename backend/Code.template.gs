@@ -53,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-10-22b · move to another report · linked documents · renumber with current codes';
+const SCRIPT_VERSION = '2026-11-10 · one transmittal for more than one period';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -194,7 +194,13 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
   if (!d.trackingNo) return;
   const year = Number(d.trackingYear) || new Date().getFullYear(), key = d.seriesKey || d.officeId;
   let n = 0;
-  readAll_('rms_items').forEach(function (r) {
+  const rows = readAll_('rms_items');
+  // One transmittal for more than one period: every period's record shares the number of the first one saved.
+  if (d.batchId) {
+    const mate = rows.filter(function (r) { return r.id !== c.id && !r.deleted && r.data && r.data.batchId === d.batchId && r.data.trackingNo; })[0];
+    if (mate) { d.trackingNo = mate.data.trackingNo; d.series = mate.data.series; d.trackingYear = mate.data.trackingYear; d.seriesKey = mate.data.seriesKey; return; }
+  }
+  rows.forEach(function (r) {
     const x = r.data || {};
     if (r.id !== c.id && x.trackingNo && (x.seriesKey || x.officeId) === key && Number(x.trackingYear) === year) n = Math.max(n, Number(x.series) || 0);
   });
@@ -232,13 +238,20 @@ function renumberAll() {
       const g = key + '#' + d.trackingYear;
       (groups[g] = groups[g] || { key: key, list: [] }).list.push(x);
     });
+    // A transmittal for more than one period counts once: its records share one number.
+    Object.keys(groups).forEach(function (g) {
+      const units = {}, list = [];
+      groups[g].list.forEach(function (x) { const u = x.rec.data.batchId || x.rec.id; if (!units[u]) { units[u] = { members: [] }; list.push(units[u]); } units[u].members.push(x); });
+      groups[g].units = list;
+    });
     const map = {}, dirty = [];
     Object.keys(groups).forEach(function (g) {
-      const grp = groups[g];
-      grp.list.sort(function (a, b) {
+      const grp = groups[g], first = function (u) { return u.members[0]; };
+      grp.units.sort(function (ua, ub) {
+        const a = first(ua), b = first(ub);
         return String(a.rec.data.receivedAt).localeCompare(String(b.rec.data.receivedAt)) || String(a.rec.data.encodedAt || '').localeCompare(String(b.rec.data.encodedAt || '')) || a.row - b.row;
       });
-      grp.list.forEach(function (x, i) {
+      grp.units.forEach(function (u, i) { u.members.forEach(function (x) {
         const d = x.rec.data, s = i + 1;
         const code = d.kind === 'comm' && !d.officeId ? 'OUT' : d.officeCode;
         const no = [code, d.kind === 'comm' ? '' : d.reportCode, d.trackingYear, ('000' + s).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
@@ -246,7 +259,7 @@ function renumberAll() {
         if (no !== d.trackingNo) map[d.trackingNo] = no;
         d.trackingNo = no; d.series = s; d.seriesKey = grp.key;
         dirty.push(x);
-      });
+      }); });
     });
     // Outgoing records that refer to an old number.
     all.forEach(function (x) { const d = x.rec.data; if (d.related && map[d.related] && dirty.indexOf(x) < 0) { d.related = map[d.related]; dirty.push(x); } });

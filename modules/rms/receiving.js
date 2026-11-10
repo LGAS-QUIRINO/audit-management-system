@@ -181,6 +181,22 @@ function trackingNo(rms, office, reportCode, year) {
 }
 // Older records may carry a pending code instead of a tracking number.
 export const numberOf = (i) => i.trackingNo || i.pendingCode || '';
+/* ---------- one transmittal for more than one period (one tracking number) ---------- */
+// Saved as one record per period, all with the same tracking number and batchId (the first record's id).
+export const batchOf = (rms, i) => (i && i.batchId ? rms.items.filter((x) => x.batchId === i.batchId).sort((a, b) => String(a.period).localeCompare(String(b.period))) : [i]);
+export const isBatchLead = (rms, i) => !i.batchId || i.batchId === i.id || !rms.items.some((x) => x.id === i.batchId);
+// "Aug–Dec 2025", "Aug, Oct, Dec 2025", "Q3–Q4 2025", "Nov–Dec 2025, Jan 2026".
+export function periodsText(list) {
+  const ps = [...new Set((list || []).filter(Boolean))].sort();
+  if (ps.length <= 1) return ps.length ? periodLabel(ps[0]) : '';
+  const short = (p) => periodLabel(p).replace(/ \d{4}$/, '').replace(/^([A-Z][a-z]{2})[a-z]+$/, '$1');
+  const byYear = {};
+  ps.forEach((p) => { (byYear[p.slice(0, 4)] = byYear[p.slice(0, 4)] || []).push(p); });
+  return Object.entries(byYear).map(([y, l]) => {
+    const run = l.length >= 3 && l.every((p, k) => { if (!k) return true; const [, a] = span(p), [, , pe] = span(l[k - 1]); return a === pe + 1; });
+    return (run ? short(l[0]) + '–' + short(l[l.length - 1]) : l.map(short).join(', ')) + ' ' + y;
+  }).join(', ');
+}
 
 export function statusText(i) {
   if (i.kind === 'comm' || i.kind === 'psao-in') return 'Received';
@@ -333,8 +349,9 @@ export function receivingHtml(refs, rms, q) {
   const mine = rms.items.filter((i) => (offIds.has(i.officeId) || (!i.officeId && (teams.includes(i.teamId) || hasRole(refs, 'admin', 'sa', 'osa')))) && (!jo || i.receivedBy === by(refs)));
   // Most recently entered first (an earlier submission encoded today shows at the top).
   // Every transmittal (newest entered first); the list shows 50 at a time and the search looks through all of them.
-  const recent = mine.filter(inGroup).sort((a, b) => String(b.encodedAt || b.receivedAt).localeCompare(String(a.encodedAt || a.receivedAt)));
-  const verify = canDecide(refs) ? rms.items.filter((i) => offIds.has(i.officeId) && isVerify(i) && inGroup(i)) : [];
+  const recent = mine.filter((i) => inGroup(i) && isBatchLead(rms, i)).sort((a, b) => String(b.encodedAt || b.receivedAt).localeCompare(String(a.encodedAt || a.receivedAt)));
+  const verify = canDecide(refs) ? rms.items.filter((i) => offIds.has(i.officeId) && isVerify(i) && inGroup(i))
+    .filter((i, k, all) => !i.batchId || all.findIndex((x) => x.batchId === i.batchId) === k) : [];
   // Periods still incomplete over all their transmittals (one row per office, report and period).
   const seen = new Set(), lacking = [];
   rms.items.filter((i) => i.kind !== 'comm' && offIds.has(i.officeId) && i.status !== 'rejected' && inGroup(i)).forEach((i) => {
@@ -348,7 +365,7 @@ export function receivingHtml(refs, rms, q) {
     return `${(i.checklist || []).filter((c) => c.ok).length} document(s) in this transmittal`; };
   const off = (id) => offs.find((o) => o.id === id);
   const rep = (id) => rms.reports.find((r) => r.id === id);
-  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : esc((rep(i.reportId)?.code || '') + ' · ' + periodLabel(i.period));
+  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
   const cols = 'grid-template-columns:minmax(190px,1.2fr) minmax(170px,1fr) 120px 220px 170px';
   const row = (i, acts) => `<div class="t-row" style="${cols}"><span class="mono"><b>${esc(numberOf(i))}</b>${i._new ? '<br><small class="warn-t">not yet confirmed</small>' : ''}</span>
     <span>${esc(i.kind === 'comm' && !i.officeId ? i.fromOutside : off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span>
@@ -372,7 +389,7 @@ export function receivingHtml(refs, rms, q) {
         ${recent.length ? `<span class="r"><label class="sr-only" for="rcv-find">Search transmittals</label><input class="input" id="rcv-find" placeholder="Search: tracking no., office, report, month, name" style="width:340px"></span>` : ''}</div>
       ${recent.length ? `<div class="t-head" style="${cols}"><span>Tracking No.</span><span>Office · Item</span><span>Received</span><span>Status</span><span></span></div>
         <div id="tx-list">${recent.map((i, n) => { const r0 = rms.reports.find((x) => x.id === i.reportId);
-          const find = [numberOf(i), off(i.officeId)?.label, i.fromOutside, i.reportCode, r0 && r0.name, i.period && periodLabel(i.period), i.subject, i.submittedBy, i.receivedByName, fmtDate(i.receivedAt), statusText(i)].filter(Boolean).join(' ').toLowerCase();
+          const find = [numberOf(i), off(i.officeId)?.label, i.fromOutside, i.reportCode, r0 && r0.name, ...(i.batchId ? batchOf(rms, i).map((x) => periodLabel(x.period)) : [i.period && periodLabel(i.period)]), i.subject, i.submittedBy, i.receivedByName, fmtDate(i.receivedAt), statusText(i)].filter(Boolean).join(' ').toLowerCase();
           return row(i, `<button class="btn sm" data-view="${i.id}">View</button>${i._new ? '' : `<button class="btn sm" data-slip="${i.id}">Slip</button>`}${canCorrect(refs) && !i._new ? `<button class="btn sm" data-fix="${i.id}">Correct</button>` : ''}`)
             .replace('<div class="t-row"', `<div class="t-row${n >= 50 ? ' more' : ''}" data-find="${esc(find)}"${n >= 50 ? ' hidden' : ''}`); }).join('')}</div>
         <p class="empty" id="tx-none" hidden>No transmittal matches the search.</p>
@@ -420,9 +437,10 @@ async function receiveForm(refs, rms, preset = null) {
         <div class="field"><label for="f-off">Submitting Office</label><select class="input" id="f-off"></select><span class="hint" id="f-off-hint"></span></div></div>
       <div id="rep-part">
         <div class="two"><div class="field"><label for="f-rep">Report</label><select class="input" id="f-rep"></select></div>
-          <div class="field"><label for="f-per">Period</label><select class="input" id="f-per"></select><span class="hint" id="f-due"></span></div></div>
+          <div class="field"><label for="f-per">Period</label><div class="rcv-type pmode"><label><input type="radio" name="pmode" value="one" checked> One period</label><label><input type="radio" name="pmode" value="many"> More than one period</label></div>
+            <select class="input" id="f-per"></select><div id="f-pers" class="rcv-items pers" hidden></div><span class="hint" id="f-due"></span></div></div>
         <div class="rcv-exist" id="f-exist" hidden></div>
-        <div><span class="legend">Checklist · tick what was actually submitted</span><div id="f-list" class="rcv-list"></div><span class="hint" id="f-state"></span></div>
+        <div><span class="legend">Checklist · tick what was actually submitted</span><div id="f-ptabs" hidden></div><div id="f-list" class="rcv-list"></div><span class="hint" id="f-state"></span></div>
         <div id="f-dec" class="rcv-dec">${auditor ? `<span class="legend">Your decision</span>
           <div class="rcv-type"><label><input type="radio" name="rdec" value="verify" checked> For Verification</label><label><input type="radio" name="rdec" value="accept"> Accept</label><label><input type="radio" name="rdec" value="reject"> Reject</label></div>
           <div class="field" id="f-drem-box" hidden><label for="f-drem">Decision remarks <span id="f-dreq">(required for a rejection)</span></label><input class="input" id="f-drem" placeholder="e.g. Accepted; DVs to follow within 5 days"></div>` : ''}
@@ -443,6 +461,32 @@ async function receiveForm(refs, rms, preset = null) {
       <p class="hint">Encoded by <b>${esc(myName(refs))}</b> · ${esc(fmtDT(now))} (recorded automatically)</p>`,
     onOpen: (bg) => {
       const kind = () => $('input[name=kind]:checked', bg).value;
+      // More than one period in one transmittal (one tracking number): the checklist is ticked once for all the periods,
+      // or per period ("Different per period").
+      let multi = false, perMonth = false, curTab = '', lastKey = '';
+      const common = { ck: new Set(), na: new Set() }, perState = {};
+      const picked = () => $$('input[name=pers]:checked', bg).map((x) => x.value).sort();
+      const listPeriod = () => (!multi ? $('#f-per', bg).value : perMonth ? curTab : '');
+      const target = () => (!multi ? null : perMonth ? (perState[curTab] = perState[curTab] || { ck: new Set(common.ck), na: new Set(common.na) }) : common);
+      const currentEnts = () => { const r = rms.reports.find((x) => x.id === $('#f-rep', bg).value), o = office(); return r && o ? entriesFor(r, o) : []; };
+      const capture = () => { const t = target(); if (!t || !$('#f-list', bg).children.length) return;
+        t.ck = new Set($$('input[name=ck]:checked', bg).map((x) => +x.value)); t.na = new Set($$('input[name=ck-na]:checked', bg).map((x) => +x.value)); };
+      const restore = () => { const t = target(); if (!t) return;
+        if (bg._pickLines) { const ents = currentEnts(); bg._pickLines(new Set([...t.ck, ...t.na].map((k) => ents[k] && ents[k].line).filter(Boolean))); }
+        $$('input[name=ck]', bg).forEach((x) => { x.checked = t.ck.has(+x.value); }); $$('input[name=ck-na]', bg).forEach((x) => { x.checked = t.na.has(+x.value); });
+        if (bg._updAcc) bg._updAcc(); state(); };
+      const drawTabs = () => {
+        const box = $('#f-ptabs', bg); box.hidden = !multi; if (!multi) { box.innerHTML = ''; return; }
+        const ps = picked();
+        box.innerHTML = `<div class="seg ptabs-mode"><a href="#" data-pm="same" class="${perMonth ? '' : 'on'}">Same for all ${ps.length} periods</a><a href="#" data-pm="diff" class="${perMonth ? 'on' : ''}">Different per period</a></div>`
+          + (perMonth ? `<div class="ptabs">${ps.map((p) => `<button type="button" class="btn sm ${p === curTab ? 'primary' : ''}" data-tab="${p}">${esc(periodLabel(p))}</button>`).join('')}</div>` : '');
+        $$('[data-pm]', box).forEach((a) => { a.onclick = (e) => { e.preventDefault(); const want = a.dataset.pm === 'diff'; if (want === perMonth) return; capture();
+          if (want) { ps.forEach((p) => { perState[p] = { ck: new Set(common.ck), na: new Set(common.na) }; }); curTab = ps[0] || ''; }
+          else if (perState[curTab]) { common.ck = new Set(perState[curTab].ck); common.na = new Set(perState[curTab].na); }
+          perMonth = want; drawTabs(); fillList(); }; });
+        $$('[data-tab]', box).forEach((b) => { b.onclick = () => { capture(); curTab = b.dataset.tab; drawTabs(); fillList(); }; });
+      };
+      const onPers = () => { capture(); const ps = picked(); if (perMonth && !ps.includes(curTab)) curTab = ps[0] || ''; drawTabs(); fillList(); dueHint(); };
       const officesOf = (mid) => offs.filter((o) => o.munId === mid);
       const fillOffices = () => {
         const list = officesOf($('#f-mun', bg).value);
@@ -476,8 +520,16 @@ async function receiveForm(refs, rms, preset = null) {
         // Suggest the earliest period not yet received from the monitoring start onward, else the latest.
         const tracked = ps.filter((p) => { const [y, , e] = span(p); return `${y}-${String(e).padStart(2, '0')}` >= rms.startPeriod; });
         const def = tracked.find((p) => !got.has(p)) || ps[ps.length - 1];
-        $('#f-per', bg).innerHTML = ps.reverse().map((p) => `<option value="${p}" ${p === def ? 'selected' : ''}>${esc(periodLabel(p))}${got.has(p) ? ' · already received' : ''}</option>`).join('')
+        $('#f-per', bg).innerHTML = [...ps].reverse().map((p) => `<option value="${p}" ${p === def ? 'selected' : ''}>${esc(periodLabel(p))}${got.has(p) ? ' · already received' : ''}</option>`).join('')
           + (r.frequency === 'As needed' ? `<option value="${year}">${year} (as needed)</option>` : '');
+        // More than one period: tick the periods this transmittal covers.
+        const key = o.id + '|' + r.id, keep = key === lastKey ? new Set(picked()) : new Set([def]);
+        if (key !== lastKey) { common.ck.clear(); common.na.clear(); Object.keys(perState).forEach((k) => delete perState[k]); lastKey = key; }
+        $('#f-pers', bg).innerHTML = ps.map((p) => { const done = got.has(p) && periodState(periodRecs(rms, o.id, r.id, p)).done;
+          return `<label><input type="checkbox" name="pers" value="${p}" ${keep.has(p) ? 'checked' : ''}> ${esc(periodLabel(p))}${done ? ' <small class="ok-t">· complete</small>' : got.has(p) ? ' <small>· received</small>' : ''}</label>`; }).join('');
+        $$('input[name=pers]', bg).forEach((x) => { x.onchange = onPers; });
+        $('.pmode', bg).hidden = r.frequency === 'As needed';
+        if (multi) drawTabs();
         fillList();
       };
       // The same office, report and period already received: this batch is added to that record (same tracking number),
@@ -485,7 +537,7 @@ async function receiveForm(refs, rms, preset = null) {
       // The same office, report and period already received: this transmittal gets its own new tracking number, and
       // only what earlier transmittals have not yet brought is listed.
       const fillList = () => {
-        const r = rms.reports.find((x) => x.id === $('#f-rep', bg).value), o = office(), p = $('#f-per', bg).value;
+        const r = rms.reports.find((x) => x.id === $('#f-rep', bg).value), o = office(), p = listPeriod();
         if (!r || !o) return;
         const recs = p ? periodRecs(rms, o.id, r.id, p) : [];
         ex = recs.length ? periodState(recs) : null;
@@ -499,6 +551,7 @@ async function receiveForm(refs, rms, preset = null) {
         box.hidden = !ex;
         const prev = new Set(ex ? ex.checklist.filter(present).map((c) => c.item) : []);
         const ents = entriesFor(r, o), items = ents.map((e) => e.item);
+        bg._pickLines = null; bg._updAcc = null;
         if (ex && ex.done) { $('#f-list', bg).innerHTML = '<p class="ok-t">Everything for this period is already in. Nothing to receive.</p>'; dueHint(); state(); decState(); return; }
         if (isGrouped(ents)) return groupedList(r, o, ents, prev);
         const show = ents.map((e, k) => ({ e, k })).filter(({ e }) => !prev.has(e.item));
@@ -513,7 +566,7 @@ async function receiveForm(refs, rms, preset = null) {
         if ($('#f-none', bg)) $('#f-none', bg).onclick = () => { $$('input[name=ck]', bg).forEach((x) => { x.checked = false; }); state(); };
         if ($('#f-find', bg)) $('#f-find', bg).oninput = () => { const v = $('#f-find', bg).value.trim().toLowerCase(); $$('.rcv-items label', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
         $$('input[name=ck]', bg).forEach((x) => { x.onchange = state; });
-        dueHint(); state(); decState();
+        dueHint(); state(); decState(); restore();
       };
       // Reports with parts per line (e.g. BRS per bank account): 1) select the accounts that came in, 2) each opens to its parts.
       const groupedList = (r, o, ents, prev) => {
@@ -541,10 +594,14 @@ async function receiveForm(refs, rms, preset = null) {
         $('#f-sel-none', bg).onclick = () => { $$('input[name=acct]', bg).forEach((x) => { x.checked = false; }); pick(); };
         if ($('#f-find', bg)) $('#f-find', bg).oninput = () => { const v = $('#f-find', bg).value.trim().toLowerCase(); $$('.acct-pick label', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
         $$('.rcv-items:not(.acct-pick) input[name=ck]', bg).forEach((x) => { x.onchange = state; });
-        dueHint(); state(); decState();
+        bg._pickLines = (set) => { $$('input[name=acct]', bg).forEach((x) => { x.checked = set.has(lines[+x.value]); }); pick(); };
+        bg._updAcc = updAcc;
+        dueHint(); state(); decState(); restore();
       };
       const dueHint = () => { const r = rms.reports.find((x) => x.id === $('#f-rep', bg).value); const p = $('#f-per', bg).value; const d = r && p ? dueDate(r, p) : null;
         const when = new Date($('#f-date', bg).value || now);
+        if (multi) { const ps = picked(), late = r ? ps.filter((x) => { const dd = dueDate(r, x); return dd && when > dd; }).length : 0;
+          $('#f-due', bg).textContent = !ps.length ? 'Tick the periods this transmittal covers.' : `${periodsText(ps)} · ${ps.length} period${ps.length > 1 ? 's' : ''} · ${late === ps.length ? 'all late' : late ? `${late} late, ${ps.length - late} on time` : 'all on time'}`; return; }
         $('#f-due', bg).textContent = d ? `Due ${fmtDate(d)}${when > d ? ' · received late' : ' · on time'}` : ''; };
       const state = () => {
         if ($('#f-acc', bg)) {
@@ -574,6 +631,12 @@ async function receiveForm(refs, rms, preset = null) {
           : choice === 'verify' ? 'Recorded For Verification; you or another auditor accept or reject it later.' : '';
       };
       $$('input[name=rdec]', bg).forEach((x) => { x.onchange = decState; });
+      $$('input[name=pmode]', bg).forEach((x) => { x.onchange = () => {
+        const want = $('input[name=pmode]:checked', bg).value === 'many'; if (want === multi) return;
+        if (want) { common.ck = new Set($$('input[name=ck]:checked', bg).map((y) => +y.value)); common.na = new Set($$('input[name=ck-na]:checked', bg).map((y) => +y.value));
+          const cur = $('#f-per', bg).value; $$('input[name=pers]', bg).forEach((y) => { if (y.value === cur) y.checked = true; }); }
+        multi = want; perMonth = false; $('#f-per', bg).hidden = multi; $('#f-pers', bg).hidden = !multi; drawTabs(); fillList(); dueHint(); }; });
+      bg._multi = () => ({ multi, perMonth, picked: picked(), capture, common, perState, show: (p) => { curTab = p; drawTabs(); fillList(); } });
       const kindState = () => { const k = kind(); $('#rep-part', bg).hidden = k !== 'report'; $('#comm-part', bg).hidden = k !== 'comm'; };
       $$('input[name=kind]', bg).forEach((x) => { x.onchange = kindState; });
       $('#f-outside', bg).onchange = () => { const o = $('#f-outside', bg).checked; $('#f-outside-box', bg).hidden = !o; $('#f-mun', bg).disabled = o; $('#f-off', bg).disabled = o; };
@@ -651,6 +714,29 @@ async function receiveForm(refs, rms, preset = null) {
         const period = $('#f-per', bg).value;
         const ents = entriesFor(r, o);
         if (!ents.length) { toast(`No ${(r.lineLabel || 'line').toLowerCase()}s are listed for this office yet. Add them in Office Setup.`, 'bad'); return false; }
+        const mm = bg._multi();
+        if (mm.multi) {
+          const pers = mm.picked;
+          if (pers.length < 2) { toast('Tick at least two periods, or choose One period.', 'bad'); return false; }
+          mm.capture();
+          const at = base.receivedAt;
+          const choice = auditor && !r.bulk ? ($('input[name=rdec]:checked', bg)?.value || 'verify') : 'verify';
+          const dRem = $('#f-drem', bg) ? $('#f-drem', bg).value.trim() : '';
+          if (choice === 'reject' && !dRem) { toast('Enter the reason for rejecting it.', 'bad'); return false; }
+          const recs = [];
+          for (const p of pers) {
+            const t = mm.perMonth ? mm.perState[p] : mm.common;
+            if (!t || (!t.ck.size && !t.na.size)) { toast(`Tick the documents received for ${periodLabel(p)}.`, 'bad'); if (mm.perMonth) mm.show(p); return false; }
+            const checklist = ents.map((e, k) => ({ ...e, ok: t.ck.has(k), at: t.ck.has(k) ? at : '', ...(t.na.has(k) && !t.ck.has(k) ? { na: true } : {}) }));
+            recs.push({ ...base, reportId: r.id, reportCode: r.code, period: p, checklist, ...(isGrouped(checklist) ? { lineLabel: r.lineLabel || 'Line' } : {}), ...(checklist.every(isIn) ? { completedAt: at } : {}),
+              batchPeriods: pers, status: choice === 'accept' ? 'accepted' : choice === 'reject' ? 'rejected' : 'verify',
+              ...(choice === 'verify' ? {} : { decision: { action: choice, remarks: dRem, by: by(refs), byName: myName(refs), at: encodedAt } }) });
+          }
+          // One tracking number, with the year of the earliest period.
+          const num = trackingNo(rms, o, r.code, Math.min(...pers.map((p) => +p.slice(0, 4))));
+          out = { multi: recs.map((x) => ({ ...x, ...num })) };
+          return true;
+        }
         const ticked = new Set($$('input[name=ck]:checked', bg).map((x) => +x.value));
         const naSet = new Set($$('input[name=ck-na]:checked', bg).map((x) => +x.value));
         if (!ticked.size && !naSet.size) { toast(ex && ex.done ? 'Everything for this period is already in.' : 'Tick at least one document received.', 'bad'); return false; }
@@ -680,6 +766,32 @@ async function receiveForm(refs, rms, preset = null) {
     } }]
   });
   if (res !== 'save') return;
+  if (out.multi) {
+    const lead = newId('rcv'), ids = out.multi.map((_, k) => (k ? lead + '-p' + (k + 1) : lead));
+    for (let k = 0; k < out.multi.length; k++) await saveItem(ids[k], { ...out.multi[k], batchId: lead }, by(refs));
+    let saved = out.multi.map((x, k) => ({ id: ids[k], ...x, batchId: lead })), confirmed = DEMO;
+    if (!DEMO && navigator.onLine) {
+      toast('Getting the tracking number from the AMS database…');
+      for (let k = 0; k < 3 && !confirmed; k++) {
+        const problems = await syncNow();
+        const rec = await store.get('rms_items', lead);
+        if (!rec) { toast('Not saved: ' + (problems[0] || 'the database refused it.'), 'bad'); return; }
+        if (!rec.pending) { saved = (await Promise.all(ids.map(async (id) => { const r2 = await store.get('rms_items', id); return r2 ? { id, ...unpackItem(r2.data) } : null; }))).filter(Boolean); confirmed = true; }
+      }
+    }
+    const txt = periodsText(saved.map((x) => x.period));
+    const again = await modal({
+      title: confirmed ? 'Saved · Tracking Number' : 'Saved on This Computer · Number Not Yet Confirmed',
+      body: `<div class="rcv-done ${confirmed ? '' : 'pend'}"><small>${confirmed ? 'TRACKING NUMBER' : 'NUMBER NOT YET CONFIRMED'}</small><b>${esc(numberOf(saved[0]))}</b></div>
+        <p>One transmittal for <b>${esc(txt)}</b> (${saved.length} periods). Status: ${statusPill(saved[0])}</p>
+        ${confirmed ? `<p>Write this number on the RECEIVED stamp, then print the slip for the submitter.${isVerify(saved[0]) ? ' An auditor will accept or reject it.' : ''}</p>`
+          : '<p>No connection to the AMS database right now. It is saved on this computer and will be sent automatically; the number may still change when it is sent.</p>'}`,
+      buttons: [{ label: 'Done', value: null }, { label: 'Receive Another', value: 'again' }, ...(confirmed ? [{ label: 'Print Slip', cls: 'primary', value: 'slip' }] : [])]
+    });
+    if (again === 'slip') printSlip(refs, { ...rms, items: [...rms.items.filter((x) => !ids.includes(x.id)), ...saved] }, saved[0]);
+    if (again === 'again') receiveForm(refs, { ...rms, items: [...rms.items, ...saved] }, atPsao ? { atPsao: true } : null);
+    return;
+  }
   if (out.addTo) {
     const id = out.addTo.id;
     await saveItem(id, out.next, by(refs));
@@ -725,6 +837,7 @@ async function receiveForm(refs, rms, preset = null) {
 /* ---------- auditor's decision ---------- */
 async function decide(refs, rms, id) {
   const i = rms.items.find((x) => x.id === id);
+  const sibs = batchOf(rms, i).filter((x) => x.id !== i.id && isVerify(x));
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   let out = null;
   const res = await modal({
@@ -732,17 +845,19 @@ async function decide(refs, rms, id) {
     body: `<p><b>${esc(off?.label || '')}</b> · ${esc(i.reportCode + ' · ' + periodLabel(i.period))}<br><small>Received ${esc(fmtDT(i.receivedAt))} by ${esc(i.receivedByName)} · received from ${esc(i.submittedBy)}${i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''}</small></p>
       <div><span class="legend">This transmittal</span>${transmittalHtml(i, periodOf(rms, i))}</div>
       <div class="rcv-type"><label><input type="radio" name="dec" value="accept" checked> Accept${missing(i).length ? ' – missing documents to follow' : ''}</label><label><input type="radio" name="dec" value="reject"> Reject – return to the submitter</label></div>
-      <div class="field"><label for="d-rem">Remarks <span id="d-req" hidden>(required for a rejection)</span></label><input class="input" id="d-rem" placeholder="e.g. Accepted; DVs to follow within 5 days"></div>`,
+      <div class="field"><label for="d-rem">Remarks <span id="d-req" hidden>(required for a rejection)</span></label><input class="input" id="d-rem" placeholder="e.g. Accepted; DVs to follow within 5 days"></div>
+      ${sibs.length ? `<div class="field"><label><input type="checkbox" id="d-all" checked> Apply to all ${sibs.length + 1} periods of this transmittal (${esc(periodsText([i, ...sibs].map((x) => x.period)))})</label></div>` : ''}`,
     onOpen: (bg) => { $$('input[name=dec]', bg).forEach((x) => { x.onchange = () => { $('#d-req', bg).hidden = x.value !== 'reject' || !x.checked; }; }); },
     buttons: [{ label: 'Cancel', value: null }, { label: 'Save Decision', cls: 'primary', value: 'save', check: (bg) => {
       const action = $('input[name=dec]:checked', bg).value, remarks = $('#d-rem', bg).value.trim();
       if (action === 'reject' && !remarks) { toast('Enter the reason for rejecting it.', 'bad'); return false; }
-      out = { action, remarks }; return true;
+      out = { action, remarks, all: !!($('#d-all', bg) && $('#d-all', bg).checked) }; return true;
     } }]
   });
   if (res !== 'save') return;
   const decision = { action: out.action, remarks: out.remarks, by: by(refs), byName: myName(refs), at: new Date().toISOString() };
   const { id: _x, _new: _n, ...data } = i;
+  if (out.all) for (const x of sibs) { const { id: sid, _new: _s, ...sd } = x; await saveItem(sid, { ...sd, status: out.action === 'accept' ? 'accepted' : 'rejected', decision }, by(refs)); }
   if (out.action === 'accept') {
     // Older records received before this rule may still need their tracking number.
     const t = data.trackingNo ? {} : trackingNo(rms, { id: i.officeId, code: i.officeCode }, i.reportCode, +i.period.slice(0, 4));
@@ -806,12 +921,13 @@ async function viewItem(refs, rms, id) {
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   const row = (k, v) => `<div class="kvrow"><small>${k}</small><span>${v}</span></div>`;
   modal({ title: numberOf(i), body: `${row('Status', statusPill(i))}${row('Office', esc(i.fromOutside || off?.label || ''))}
-    ${i.kind === 'comm' ? row('Subject', esc(i.subject)) + (i.pages ? row('Pages', esc(i.pages)) : '') : row('Report', esc(i.reportCode + ' · ' + periodLabel(i.period)))}
+    ${i.kind === 'comm' ? row('Subject', esc(i.subject)) + (i.pages ? row('Pages', esc(i.pages)) : '') : row('Report', esc(i.reportCode + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) + ' (' + batchOf(rms, i).length + ' periods, one tracking number)' : periodLabel(i.period))))}
     ${row('Received', esc(fmtDate(i.receivedAt) + ', ' + new Date(i.receivedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) + ' by ' + esc(i.receivedByName)
       + (encodedLater(i) ? `<br><small>Encoded later: ${esc(fmtDT(i.encodedAt))}</small>` : ''))}
     ${row('Received from', esc(i.submittedBy) + (i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''))}
     ${i.pendingCode && i.trackingNo ? row('Pending code', `<span class="mono">${esc(i.pendingCode)}</span>`) : ''}
-    ${i.checklist ? row('This transmittal', transmittalHtml(i, periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i))) : ''}
+    ${i.checklist && i.batchId ? batchOf(rms, i).map((x) => row(esc(periodLabel(x.period)), statusPill(x) + transmittalHtml(x, periodOf(rms, x)))).join('')
+      : i.checklist ? row('This transmittal', transmittalHtml(i, periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i))) : ''}
     ${row('History', historyHtml(i))}
     ${i.remarks ? row('Remarks', esc(i.remarks)) : ''}`,
     buttons: [{ label: 'Close', value: null, cls: canCorrect(refs) && !i._new ? '' : 'primary' }, ...(canCorrect(refs) && !i._new ? [{ label: 'Correct', cls: 'primary', value: 'fix' }] : [])] })
@@ -872,10 +988,14 @@ async function correctItem(refs, rms, id) {
   const periods = isRep && r ? [...periodsOf(r, y - 1), ...periodsOf(r, y), ...periodsOf(r, y + 1)].filter((p) => { const [py, pa] = span(p); return new Date(py, pa - 1, 1) <= new Date(); }) : [];
   if (isRep && i.period && !periods.includes(i.period)) periods.push(i.period);
   const ck = i.checklist || [], many = ck.length > LONG;
-  let out = null;
+  // A transmittal for more than one period: correct one period at a time; periods can be added or removed.
+  const batch = i.batchId ? batchOf(rms, i) : [];
+  let out = null, switchTo = null;
   const res = await modal({
     title: 'Correct · ' + numberOf(i), wide: true,
     body: `<p class="hint">For mistakes in encoding. The tracking number stays the same, and this correction is kept in the history.</p>
+      ${batch.length > 1 ? `<div class="field" style="max-width:360px"><label for="c-batch">This transmittal covers ${esc(periodsText(batch.map((x) => x.period)))} · correcting</label>
+        <select class="input" id="c-batch">${batch.map((x) => `<option value="${x.id}" ${x.id === i.id ? 'selected' : ''}>${esc(periodLabel(x.period))}</option>`).join('')}</select></div>` : ''}
       <div class="two"><div class="field"><label for="c-date">Date received</label><input class="input" type="datetime-local" id="c-date" value="${localInput(i.receivedAt)}" max="${localInput(new Date())}"></div>
         ${isRep ? `<div class="field"><label for="c-per">Period</label><select class="input" id="c-per">${periods.map((p) => `<option value="${p}" ${p === i.period ? 'selected' : ''}>${esc(periodLabel(p))}</option>`).join('')}</select></div>`
           : `<div class="field"><label for="c-subj">Subject</label><input class="input" id="c-subj" value="${esc(i.subject || '')}"></div>`}</div>
@@ -893,12 +1013,15 @@ async function correctItem(refs, rms, id) {
       <div class="field"><label for="c-rem">Remarks</label><input class="input" id="c-rem" value="${esc(i.remarks || '')}"></div>
       <div class="field"><label for="c-why">Reason for the correction (required)</label><input class="input" id="c-why" placeholder="e.g. Encoder ticked GF-1234 by mistake; not in the bundle"></div>`,
     onOpen: (bg) => {
+      if ($('#c-batch', bg)) $('#c-batch', bg).onchange = () => { switchTo = $('#c-batch', bg).value; $('.mf .btn', bg).click(); };
       const st = () => { const all = $$('input[name=cfix]', bg); if (!all.length) return; const t = all.filter((x) => x.checked).length; $('#c-state', bg).textContent = `${t} of ${all.length} submitted`; };
       $$('input[name=cfix]', bg).forEach((x) => { x.onchange = st; }); st();
       if ($('#c-find', bg)) $('#c-find', bg).oninput = () => { const v = $('#c-find', bg).value.trim().toLowerCase(); $$('.rcv-items label[data-t], details.acc', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
       if ($('details.acc', bg)) wireAccordions(bg, 'cfix', st);
     },
-    buttons: [{ label: 'Cancel', value: null }, ...(isRep ? [{ label: 'Move to Another Report…', value: 'move' }] : []), { label: 'Save Correction', cls: 'primary', value: 'save', check: (bg) => {
+    buttons: [{ label: 'Cancel', value: null }, ...(isRep ? [{ label: 'Move to Another Report…', value: 'move' }] : []),
+      ...(isRep && batch.length > 1 ? [{ label: 'Remove This Period', value: 'rmp' }] : []), ...(isRep ? [{ label: 'Add a Period…', value: 'addp' }] : []),
+      { label: 'Save Correction', cls: 'primary', value: 'save', check: (bg) => {
       const why = $('#c-why', bg).value.trim();
       if (!why) { toast('Enter the reason for the correction.', 'bad'); return false; }
       const when = readWhen($('#c-date', bg).value);
@@ -939,7 +1062,10 @@ async function correctItem(refs, rms, id) {
       out = { patch, changes, why }; return true;
     } }]
   });
+  if (switchTo) return correctItem(refs, rms, switchTo);
   if (res === 'move') return moveItem(refs, rms, id);
+  if (res === 'addp') return addPeriod(refs, rms, id);
+  if (res === 'rmp') return removePeriod(refs, rms, id);
   if (res !== 'save') return;
   const { id: _x, _new: _n, ...data } = i;
   const corrections = [...(i.corrections || []), { at: new Date().toISOString(), by: by(refs), byName: myName(refs), reason: out.why, changes: out.changes }];
@@ -947,6 +1073,50 @@ async function correctItem(refs, rms, id) {
   if (!next.completedAt) delete next.completedAt;
   await saveItem(id, next, by(refs));
   toast('Correction saved and recorded in the history.', 'ok');
+}
+
+/* ---------- add or remove a period of a transmittal (Admin and SA) ---------- */
+// Adding: the new period gets the same tracking number and, to start with, the same documents ticked; correct it after.
+async function addPeriod(refs, rms, id) {
+  const i = rms.items.find((x) => x.id === id), r = rms.reports.find((x) => x.id === i.reportId);
+  const batch = i.batchId ? batchOf(rms, i) : [i], have = new Set(batch.map((x) => x.period));
+  const y = +String(i.period).slice(0, 4), now = new Date();
+  const ps = [...periodsOf(r, y - 1), ...periodsOf(r, y), ...periodsOf(r, y + 1)].filter((p) => { const [py, pa] = span(p); return new Date(py, pa - 1, 1) <= now && !have.has(p); }).reverse();
+  if (!ps.length) return toast('No other period to add.', 'bad');
+  let out = null;
+  const res = await modal({ title: 'Add a Period · ' + numberOf(i),
+    body: `<p>Now: <b>${esc(i.reportCode + ' · ' + periodsText([...have]))}</b>. The added period gets the same tracking number and the same documents ticked as ${esc(periodLabel(i.period))}; correct it afterwards if they differ.</p>
+      <div class="field"><label for="a-per">Period to add</label><select class="input" id="a-per">${ps.map((p) => `<option value="${p}">${esc(periodLabel(p))}</option>`).join('')}</select></div>
+      <div class="field"><label for="a-why">Reason (required)</label><input class="input" id="a-why" placeholder="e.g. November was also in this transmittal"></div>`,
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Add Period', cls: 'primary', value: 'save', check: (bg) => {
+      const why = $('#a-why', bg).value.trim(); if (!why) { toast('Enter the reason.', 'bad'); return false; }
+      out = { p: $('#a-per', bg).value, why }; return true; } }] });
+  if (res !== 'save') return;
+  const lead = i.batchId || i.id, pers = [...have, out.p].sort(), when = new Date().toISOString();
+  const note = { at: when, by: by(refs), byName: myName(refs), reason: out.why };
+  const { id: _x, _new: _n, corrections: _c, ...data } = i;
+  await saveItem(lead + '-a' + Date.now().toString(36), { ...data, period: out.p, batchId: lead, batchPeriods: pers,
+    corrections: [{ ...note, changes: [`added ${periodLabel(out.p)} to transmittal ${numberOf(i)}`] }] }, by(refs));
+  for (const x of batch) { const { id: xid, _new: _m, ...xd } = x; await saveItem(xid, { ...xd, batchId: lead, batchPeriods: pers,
+    corrections: [...(x.corrections || []), { ...note, changes: [`${periodLabel(out.p)} added to this transmittal`] }] }, by(refs)); }
+  toast(`${periodLabel(out.p)} added to ${numberOf(i)}. Check its documents with Correct.`, 'ok');
+}
+// Removing: the period's record is deleted (Admin only); the rest of the transmittal keeps its number.
+async function removePeriod(refs, rms, id) {
+  if (!canCombine(refs)) return toast('Only the Admin can remove a period from a transmittal.', 'bad');
+  const i = rms.items.find((x) => x.id === id), batch = batchOf(rms, i), rest = batch.filter((x) => x.id !== id);
+  const go = await modal({ title: 'Remove ' + periodLabel(i.period) + ' · ' + numberOf(i),
+    body: `<p>Remove <b>${esc(periodLabel(i.period))}</b> from this transmittal? ${esc(periodsText(rest.map((x) => x.period)))} keep${rest.length === 1 ? 's' : ''} the number ${esc(numberOf(i))}. The monitor will no longer count ${esc(periodLabel(i.period))} as received with it.</p>
+      <div class="field"><label for="r-why">Reason (required)</label><input class="input" id="r-why" placeholder="e.g. Encoded by mistake; only Aug–Nov were in the bundle"></div>`,
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Remove', cls: 'primary', value: 'go', check: (bg) => { const w = $('#r-why', bg).value.trim(); if (!w) { toast('Enter the reason.', 'bad'); return false; } bg._why = w; return true; } }],
+    onOpen: (bg) => { removePeriod._bg = bg; } });
+  if (go !== 'go') return;
+  const why = removePeriod._bg._why, when = new Date().toISOString(), pers = rest.map((x) => x.period);
+  const { id: _x, _new: _n, ...data } = i;
+  await saveItem(id, { ...data, removedFrom: numberOf(i), removedReason: why }, by(refs), { deleted: true });
+  for (const x of rest) { const { id: xid, _new: _m, ...xd } = x; await saveItem(xid, { ...xd, batchPeriods: pers,
+    corrections: [...(x.corrections || []), { at: when, by: by(refs), byName: myName(refs), reason: why, changes: [`${periodLabel(i.period)} removed from this transmittal`] }] }, by(refs)); }
+  toast(`${periodLabel(i.period)} removed from ${numberOf(i)}.`, 'ok');
 }
 
 /* ---------- move a record to another report (Admin and SA) ---------- */
@@ -1013,6 +1183,25 @@ export function printSlip(refs, rms, i) {
   // What the whole period still lacks, over all its transmittals (this one included even if not yet in the list).
   const agg = i.kind === 'comm' ? null : periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i), aggMiss = agg ? agg.checklist.filter((c) => !isIn(c)) : [];
   const pend = !i.trackingNo, ver = isVerify(i);
+  // One transmittal for more than one period: one slip, a section per period.
+  const batch = i.kind === 'report' && i.batchId ? batchOf(rms, i) : [i];
+  const many = batch.length > 1;
+  const partOf = (x) => {
+    const ag = periodOf({ ...rms, items: [...rms.items.filter((y) => y.id !== x.id), x] }, x), miss = ag.checklist.filter((c) => !isIn(c));
+    const head = many ? `<div class="per">${esc(periodLabel(x.period).toUpperCase())}</div>` : '';
+    if (isGrouped(x.checklist)) {
+      // This transmittal only: the accounts it brought and, per account, the parts still missing. (The Submission Monitor
+      // shows the accounts not yet submitted at all.)
+      const mine = linesOf(x.checklist).filter(([, es]) => es.some((e) => e.ok || e.na)).map(([l]) => l), lbl = ((x.lineLabel || 'account') + (mine.length === 1 ? '' : 's')).toLowerCase();
+      const lacks = (l) => ag.checklist.filter((c) => c.line === l && !isIn(c)).map((c) => c.part);
+      return head + `<div class="sec">SUBMITTED · ${mine.length} ${esc(lbl)}</div><ul class="${mine.length > 14 ? 'cols' : ''}">${mine.map((l) => { const m = lacks(l), a = attached(x, l); return `<li class="${m.length ? 'miss' : 'ok'}">${esc(l)}${m.length ? ` — missing ${esc(m.join(', '))}` : ''}${a.length ? ` (+ ${esc(a.join(', '))})` : ''}</li>`; }).join('')}</ul>`;
+    }
+    const ok = (x.checklist || []).filter((c) => c.ok);
+    if (many) return head + `<div class="ln">✓ ${ok.length ? esc(ok.map((c) => c.item).join(', ')) : '—'}</div><div class="ln">✗ ${miss.length ? esc(miss.map((c) => c.item).join(', ')) : 'None missing'}</div>`;
+    return `<div class="sec">SUBMITTED</div><ul>${ok.map((c) => `<li class="ok">${esc(c.item)}</li>`).join('')}</ul>
+      <div class="sec">MISSING</div><ul>${miss.length ? miss.map((c) => `<li class="miss">${esc(c.item)}</li>`).join('') : '<li>None</li>'}</ul>`;
+  };
+  const anyMiss = batch.some((x) => periodOf({ ...rms, items: [...rms.items.filter((y) => y.id !== x.id), x] }, x).checklist.some((c) => !isIn(c)));
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(numberOf(i))}</title><style>
     @page{size:letter; margin:0.4in} body{margin:0; font-family:Arial,Helvetica,sans-serif; color:#111}
     .slip{width:4.25in; min-height:5.5in; padding:0.22in 0.26in; box-sizing:border-box; font-size:9.5pt; line-height:1.3; display:flex; flex-direction:column; border:1px dashed #aaa}
@@ -1025,24 +1214,18 @@ export function printSlip(refs, rms, i) {
     ul{margin:0; padding:0; list-style:none; font-size:9pt} ul.cols{columns:2; column-gap:10px; font-size:8pt} ul.cols li{break-inside:avoid} li{padding:1px 0 1px 16px; position:relative} li.ok:before{content:"✓"; position:absolute; left:2px; font-weight:700} li.miss:before{content:"✗"; position:absolute; left:2px; font-weight:700}
     .note{font-size:8pt; border:1px solid #999; padding:4px 6px; margin-top:7px; background:#f6f6f6}
     .foot{margin-top:auto; padding-top:10px; display:flex; justify-content:space-between; font-size:8pt; gap:10px} .sig{border-top:1px solid #111; padding-top:2px; text-align:center; min-width:1.6in}
+    .per{font-weight:700; font-size:8.5pt; margin:6px 0 1px; border-bottom:1px solid #999} .ln{font-size:8.5pt; padding-left:4px}
     @media print{ .slip{border:0} }</style></head><body><div class="slip">
     <div class="hd"><img src="img/coa-logo.png" alt=""><div><div class="t1">COMMISSION ON AUDIT</div><div class="t2">${esc(teamLine)}</div></div></div>
     <div class="title">ACKNOWLEDGMENT RECEIPT</div>
     <div class="no"><small>${pend ? 'PENDING CODE' : 'TRACKING NUMBER'}</small><b>${esc(numberOf(i))}</b></div>
     <div class="kv"><span>${i.fromOutside ? 'From' : 'Office'}</span><span><b>${esc(i.fromOutside || off?.label || '')}</b></span>
-      ${i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + periodLabel(i.period))}</span>`}
+      ${i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + (many ? periodsText(batch.map((x) => x.period)) + ' (' + batch.length + ' periods)' : periodLabel(i.period)))}</span>`}
       <span>Received</span><span>${esc(new Date(i.receivedAt).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>
       <span>Received from</span><span>${esc(i.submittedBy)}${i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''}</span></div>
-    ${i.kind === 'report' ? `${isGrouped(i.checklist) ? (() => {
-      // This transmittal only: the accounts it brought and, per account, the parts still missing. (The Submission Monitor
-      // shows the accounts not yet submitted at all.)
-      const mine = linesOf(i.checklist).filter(([, es]) => es.some((e) => e.ok || e.na)).map(([l]) => l), lbl = ((i.lineLabel || 'account') + (mine.length === 1 ? '' : 's')).toLowerCase();
-      const lacks = (l) => agg.checklist.filter((c) => c.line === l && !isIn(c)).map((c) => c.part);
-      return `<div class="sec">SUBMITTED · ${mine.length} ${esc(lbl)}</div><ul class="${mine.length > 14 ? 'cols' : ''}">${mine.map((l) => { const m = lacks(l), a = attached(i, l); return `<li class="${m.length ? 'miss' : 'ok'}">${esc(l)}${m.length ? ` — missing ${esc(m.join(', '))}` : ''}${a.length ? ` (+ ${esc(a.join(', '))})` : ''}</li>`; }).join('')}</ul>`; })()
-      : `<div class="sec">SUBMITTED</div><ul>${okList.map((c) => `<li class="ok">${esc(c.item)}</li>`).join('')}</ul>
-      <div class="sec">MISSING</div><ul>${aggMiss.length ? aggMiss.map((c) => `<li class="miss">${esc(c.item)}</li>`).join('') : '<li>None</li>'}</ul>`}
-      ${ver ? `<div class="note">Received subject to verification by the Auditor.${aggMiss.length ? ' Please submit the missing documents.' : ''}</div>`
-        : aggMiss.length && i.status !== 'rejected' ? `<div class="note">Please submit the missing documents.</div>` : ''}
+    ${i.kind === 'report' ? `${batch.map(partOf).join('')}
+      ${ver ? `<div class="note">Received subject to verification by the Auditor.${anyMiss ? ' Please submit the missing documents.' : ''}</div>`
+        : anyMiss && i.status !== 'rejected' ? `<div class="note">Please submit the missing documents.</div>` : ''}
       ${i.status === 'rejected' && i.decision?.remarks ? `<div class="note">Rejected: ${esc(i.decision.remarks)}</div>` : ''}` : ''}
     <div class="foot"><span>Status: <b>${esc(statusText(i))}</b></span><div class="sig"><b>${esc(i.receivedByName)}</b><br>Received by</div></div>
     </div><script>window.onload=()=>{window.focus();window.print();}<\/script></body></html>`;
