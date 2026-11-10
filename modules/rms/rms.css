@@ -185,7 +185,8 @@ table.withdocs td.dc{font-size:12px; padding:6px 4px; min-width:34px}
 .note.doc-key b{display:inline; margin:0 2px 0 0}
 /* Receiving: one transmittal for more than one period */
 .rcv-type.pmode{margin:0 0 6px; gap:14px; font-size:12.5px}
-.rcv-items.pers{max-height:190px; overflow:auto; display:block; columns:3 140px; column-gap:12px; border:1px solid var(--line); border-radius:10px; padding:8px 10px}
+.rcv-items.pers[hidden]{display:none}
+.rcv-items.pers{display:block; columns:3 140px; column-gap:12px; border:1px solid var(--line); border-radius:10px; padding:8px 10px}
 .rcv-items.pers label{display:block; font-size:13px; break-inside:avoid; padding:1px 0}
 #f-ptabs{margin:6px 0 8px} #f-ptabs .seg{display:inline-flex; margin-bottom:6px}
 #f-ptabs .ptabs{display:flex; flex-wrap:wrap; gap:6px}
