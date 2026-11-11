@@ -53,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-11-10 · one transmittal for more than one period';
+const SCRIPT_VERSION = '2026-11-11 · numbers fix themselves (year, codes)';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -143,6 +143,7 @@ function push_(changes, email, roles) {
   const lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
     const log = sheet_('log');
+    codes_ = null;   // read the current report and office codes again for this save
     return changes.map(function (c) {
       const res = { table: c.table, id: c.id };
       try {
@@ -190,14 +191,20 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
     throw new Error('Only an auditor (ATL, Team Member, SA or Admin) can accept or reject.');
   // Moved to another report (Admin or SA): a new number in the new report's series; the old one stays in the history.
   const moved = old && corrector && d.reportId && old.reportId && d.reportId !== old.reportId;
-  if (old && old.trackingNo && !moved) { d.trackingNo = old.trackingNo; d.series = old.series; d.trackingYear = old.trackingYear; d.seriesKey = old.seriesKey; return; }
+  // A number that no longer matches its record (the period's year, or a report or office code changed later) gets a new
+  // number at the end of the right series; the old one is kept in the record's history. Other records keep theirs.
+  const want = expected_(d);
+  const stale = old && old.trackingNo && want && String(old.trackingNo).indexOf(want.prefix) !== 0;
+  if (old && old.trackingNo && !moved && !stale) { d.trackingNo = old.trackingNo; d.series = old.series; d.trackingYear = old.trackingYear; d.seriesKey = old.seriesKey; return; }
+  const oldNo = old && old.trackingNo;
+  if (want && (stale || !old)) { d.officeCode = want.officeCode; if (d.kind !== 'comm') d.reportCode = want.reportCode; d.trackingYear = want.year; d.seriesKey = want.key; d.trackingNo = d.trackingNo || want.prefix; }
   if (!d.trackingNo) return;
   const year = Number(d.trackingYear) || new Date().getFullYear(), key = d.seriesKey || d.officeId;
   let n = 0;
   const rows = readAll_('rms_items');
   // One transmittal for more than one period: every period's record shares the number of the first one saved.
   if (d.batchId) {
-    const mate = rows.filter(function (r) { return r.id !== c.id && !r.deleted && r.data && r.data.batchId === d.batchId && r.data.trackingNo; })[0];
+    const mate = rows.filter(function (r) { return r.id !== c.id && !r.deleted && r.data && r.data.batchId === d.batchId && r.data.trackingNo && (!want || String(r.data.trackingNo).indexOf(want.prefix) === 0); })[0];
     if (mate) { d.trackingNo = mate.data.trackingNo; d.series = mate.data.series; d.trackingYear = mate.data.trackingYear; d.seriesKey = mate.data.seriesKey; return; }
   }
   rows.forEach(function (r) {
@@ -207,6 +214,29 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
   const code = key === 'outside' ? 'OUT' : d.officeCode;
   d.series = n + 1; d.trackingYear = year; d.seriesKey = key;
   d.trackingNo = [code, d.kind === 'comm' ? '' : d.reportCode, year, ('000' + d.series).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
+  if (oldNo && oldNo !== d.trackingNo) d.corrections = (d.corrections || []).concat([{ at: new Date().toISOString(), by: 'AMS', byName: 'AMS database',
+    reason: 'Tracking number updated to match the record', changes: ['number ' + oldNo + ' → ' + d.trackingNo] }]);
+}
+// What a received record's number should start with: office code, report code (reports) and year
+// (reports: the period's year, the earliest one for a transmittal of several periods; communications: as given).
+let codes_ = null;
+function expected_(d) {
+  if (!d || ['out', 'psao-in', 'psao-out'].indexOf(d.kind) >= 0) return null;
+  if (!codes_) {
+    codes_ = { rep: {}, off: {} };
+    readAll_('rms_reports').forEach(function (r) { if (!r.deleted && r.data && r.data.code) codes_.rep[r.id] = r.data.code; });
+    readAll_('rms_offices').forEach(function (r) { if (!r.deleted && r.data && r.data.code) codes_.off[r.id] = r.data.code; });
+  }
+  if (d.kind === 'comm') {
+    const oc = d.officeId ? (codes_.off[d.officeId] || d.officeCode) : 'OUT', y = Number(d.trackingYear);
+    if (!oc || !y) return null;
+    return { prefix: oc + '-' + y + '-', officeCode: d.officeId ? oc : d.officeCode, year: y, key: d.officeId || 'outside' };
+  }
+  const oc = codes_.off[d.officeId] || d.officeCode, rc = codes_.rep[d.reportId] || d.reportCode;
+  const ps = (d.batchPeriods && d.batchPeriods.length ? d.batchPeriods : [d.period]).filter(Boolean);
+  const y = ps.length ? Math.min.apply(null, ps.map(function (p) { return Number(String(p).slice(0, 4)); })) : Number(d.trackingYear);
+  if (!oc || !rc || !y) return null;
+  return { prefix: oc + '-' + rc + '-' + y + '-', officeCode: oc, reportCode: rc, year: y, key: d.officeId + '|' + rc };
 }
 
 /* ---------- one-time: renumber the tracking numbers (21 Oct 2026) ---------- */

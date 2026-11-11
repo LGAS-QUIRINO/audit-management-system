@@ -181,6 +181,39 @@ function trackingNo(rms, office, reportCode, year) {
 }
 // Older records may carry a pending code instead of a tracking number.
 export const numberOf = (i) => i.trackingNo || i.pendingCode || '';
+/* ---------- numbers that no longer match their record ---------- */
+// What a number should start with: office code, report code and the period's year (the earliest period of a transmittal
+// of several periods); communications: office code and year. The AMS database gives a stale number a new one when the
+// record is saved; the Admin or SA opening Incoming re-saves such records, so they fix themselves.
+export function expectedPrefix(rms, i) {
+  if (!i || !i.trackingNo || ['out', 'psao-in', 'psao-out'].includes(i.kind)) return null;
+  const off = (rms.offices || []).find((o) => o.id === i.officeId);
+  if (i.kind === 'comm') { const oc = i.officeId ? (off?.code || i.officeCode) : 'OUT'; return oc && i.trackingYear ? `${oc}-${i.trackingYear}-` : null; }
+  const rc = rms.reports.find((r) => r.id === i.reportId)?.code || i.reportCode, oc = off?.code || i.officeCode;
+  const ps = (i.batchPeriods && i.batchPeriods.length ? i.batchPeriods : [i.period]).filter(Boolean);
+  const y = ps.length ? Math.min(...ps.map((p) => +String(p).slice(0, 4))) : +i.trackingYear;
+  return oc && rc && y ? `${oc}-${rc}-${y}-` : null;
+}
+export const isStale = (rms, i) => { const p = expectedPrefix(rms, i); return !!p && !(String(i.trackingNo).startsWith(p) && /^\d{4}$/.test(String(i.trackingNo).slice(p.length))); };
+export async function fixStaleNumbers(refs, rms) {
+  if (DEMO || !canCorrect(refs) || !navigator.onLine) return;
+  let tried = {}; try { tried = JSON.parse(localStorage.getItem('rms-num-fix') || '{}'); } catch (e) { tried = {}; }
+  const now = Date.now();
+  const stale = rms.items.filter((i) => !i._new && isStale(rms, i) && !(tried[i.id] > now - 864e5));
+  if (!stale.length) return;
+  // A transmittal of several periods is re-saved whole, first record first, so all its periods share the new number.
+  const ids = new Set(); stale.forEach((i) => { (i.batchId ? batchOf(rms, i) : [i]).forEach((x) => ids.add(x.id)); });
+  const list = rms.items.filter((x) => ids.has(x.id)).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const before = new Map(list.map((x) => [x.id, x.trackingNo]));
+  for (const x of list) { const { id, _new: _n, ...data } = x; await saveItem(id, data, by(refs)); tried[id] = now; }
+  try { localStorage.setItem('rms-num-fix', JSON.stringify(tried)); } catch (e) { /* ignore */ }
+  await syncNow();
+  const changes = [];
+  for (const x of list) { const r = await store.get('rms_items', x.id); if (r && r.data && r.data.trackingNo !== before.get(x.id)) changes.push(before.get(x.id) + ' → ' + r.data.trackingNo); }
+  const u = [...new Set(changes)];
+  if (u.length) toast(`${u.length} tracking number${u.length > 1 ? 's' : ''} updated to match the record: ${u.slice(0, 3).join(', ')}${u.length > 3 ? ' …' : ''}. Reprint ${u.length > 1 ? 'their slips' : 'its slip'}.`, 'ok');
+}
+
 /* ---------- one transmittal for more than one period (one tracking number) ---------- */
 // Saved as one record per period, all with the same tracking number and batchId (the first record's id).
 export const batchOf = (rms, i) => (i && i.batchId ? rms.items.filter((x) => x.batchId === i.batchId).sort((a, b) => String(a.period).localeCompare(String(b.period))) : [i]);
@@ -412,6 +445,7 @@ export function wireReceiving(refs, rms, q, rerender) {
   $$('[data-fix]').forEach((b) => { b.onclick = () => correctItem(refs, rms, b.dataset.fix); });
   $$('[data-slip]').forEach((b) => { b.onclick = () => printSlip(refs, rms, rms.items.find((i) => i.id === b.dataset.slip)); });
   if (q.get('new') === '1') { history.replaceState(null, '', '#/rms/receiving'); receiveForm(refs, rms); }
+  fixStaleNumbers(refs, rms).catch(() => {});
 }
 
 /* ---------- receive form ---------- */
