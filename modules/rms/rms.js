@@ -7,7 +7,7 @@ import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { download } from './export.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
-import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem } from './receiving.js';
+import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText } from './receiving.js';
 
 // Load this module's look once.
 if (!document.querySelector('link[data-rms]')) {
@@ -336,8 +336,10 @@ function acctStatus(rms, office, r, p, line, now = new Date()) {
   { const [y, , e] = span(p); if (`${y}-${String(e).padStart(2, '0')}` < rms.startPeriod) return { s: 'untracked' }; }
   if (byAnnual(r, p)) return { s: 'annual' };
   const due = dueDate(r, p), recs = periodRecs(rms, office.id, r.id, p);
-  const ents = recs.length ? periodState(recs).checklist.filter((c) => c.line === line) : [];
-  const mine = recs.filter((x) => (x.checklist || []).some((c) => c.line === line && (c.ok || c.na)));
+  // A list without parts (e.g. TB per office) keeps the line as the item itself.
+  const lineOf = (c) => c.line || (!c.part && (r.checklist || []).length === 0 ? c.item : null);
+  const ents = recs.length ? periodState(recs).checklist.filter((c) => lineOf(c) === line) : [];
+  const mine = recs.filter((x) => (x.checklist || []).some((c) => lineOf(c) === line && (c.ok || c.na)));
   if (mine.length && (mine.some((x) => !x.virtual || x.contained) || ents.every(isIn))) {
     if (mine.some(isVerify)) return { s: 'verify', due, recs: mine, ents };
     if (!ents.every(isIn)) return { s: 'incomplete', due, recs: mine, ents };
@@ -362,6 +364,31 @@ function shortNames(docs) {
   const dup = out.map((a) => out.filter((x) => x === a).length > 1);
   return out.map((a, i) => { if (!dup[i]) return a; const ws = docs[i].name.split(/\s+/); return a + ws[ws.length - 1].slice(1, 4).toLowerCase(); });
 }
+/* ---------- hover bubble: the tracking number(s) of a cell ---------- */
+// Received: the number(s) and date received (late against the due date; what is missing for M). Nothing received: the due date.
+function tipOf(st, miss = []) {
+  if (!st) return '';
+  if (st.s === 'untracked') return 'Before monitoring started';
+  if (st.s === 'annual') return 'Replaced by the annual report';
+  const recs = (st.recs || (st.agg && st.agg.recs) || []).filter(Boolean);
+  const due = st.due ? 'due ' + fmtDate(st.due) : 'no set due date';
+  if (!recs.length || ['overdue', 'notdue', 'nodue'].includes(st.s)) {
+    return st.s === 'overdue' ? `Not submitted<br><small>${esc(due)} · overdue</small>` : st.s === 'nodue' ? 'Not submitted<br><small>no set due date</small>' : `Not yet due<br><small>${esc(due)}</small>`;
+  }
+  const seen = new Set(), lines = [];
+  recs.forEach((r) => { const n = numberOf(r); if (!n || seen.has(n)) return; seen.add(n);
+    lines.push(`<b>${esc(n)}</b>${r.virtual ? ` <small>with the ${esc(r.viaCode)} (${esc(periodLabel(r.viaPeriod))})</small>` : ''}`); });
+  const last = recs[recs.length - 1];
+  const batch = recs.find((r) => r.batchPeriods && r.batchPeriods.length > 1);
+  const when = recs.length > 1 ? `${seen.size > 1 ? seen.size + ' transmittals · last ' : ''}received ${fmtDate(last.receivedAt)}` : `received ${fmtDate(last.receivedAt)}`;
+  const how = st.s === 'late' ? ` · ${due} (late)` : st.s === 'complete' && st.due ? ' · on time' : st.s === 'verify' ? ' · for verification' : '';
+  return lines.join('<br>') + (batch ? `<br><small>${esc(periodsText(batch.batchPeriods))} in one transmittal</small>` : '')
+    + `<br><small>${esc(when + how)}</small>` + (st.s === 'incomplete' && miss.length ? `<br><small>missing: ${esc(miss.slice(0, 4).join(', '))}${miss.length > 4 ? ' and ' + (miss.length - 4) + ' more' : ''}</small>` : '');
+}
+// The bubble of one document cell.
+const docTip = (st, e, d, m) => e && e.ok && e.from ? `<b>${esc(e.from)}</b><br><small>${esc(d.name)} · ${esc(m.t)}</small>`
+  : `${esc(d.name)}<br><small>${esc(m.t)}${st && st.due && !['complete', 'late', 'verify'].includes(m.c) ? ' · due ' + esc(fmtDate(st.due)) : ''}</small>`;
+
 // One document of one period: ✓ on time · L late · V for verification · – N/A · ✗ missing (red once overdue) · · not yet due / optional.
 function docMark(st, e, doc, now) {
   if (!st || st.s === 'untracked') return { c: 'untracked', m: '—', t: 'Before monitoring started' };
@@ -391,7 +418,7 @@ function showBar(ps, show, qs, docs) {
 }
 // The column headings: one row (Summary) or two rows (periods, then their documents).
 function headRows(first, cols, docs, show, unit, extra = '') {
-  if (show === 'sum') return `<tr><th>${first}</th>${cols.map((c) => `<th class="q" data-goper="${esc(c.p)}" title="Click to see the documents of ${esc(c.head)}">${esc(c.head)}</th>`).join('')}${unit ? `<th>${esc(unit)}</th>` : ''}${extra}</tr>`;
+  if (show === 'sum') return `<tr><th>${first}</th>${cols.map((c) => docs.length ? `<th class="q" data-goper="${esc(c.p)}" title="Click to see the documents of ${esc(c.head)}">${esc(c.head)}</th>` : `<th>${esc(c.head)}</th>`).join('')}${unit ? `<th>${esc(unit)}</th>` : ''}${extra}</tr>`;
   const sn = shortNames(docs);
   return `<tr><th rowspan="2">${first}</th>${cols.map((c) => `<th colspan="${docs.length}" class="pgrp">${esc(c.head)}</th>`).join('')}${unit ? `<th rowspan="2">${esc(unit)}</th>` : ''}</tr>
     <tr class="docs">${cols.map(() => docs.map((d, k) => `<th title="${esc(d.name)}${d.opt ? ' (optional)' : ''}">${esc(sn[k])}${d.opt ? '*' : ''}</th>`).join('')).join('')}</tr>`;
@@ -419,9 +446,9 @@ function acctHtml(refs, rms, q, ctx) {
         cs.filter((x) => ps.includes(x.p)).forEach((x) => { tally[x.st.s] = (tally[x.st.s] || 0) + 1; });
         const dueN = cs.filter((x) => !['untracked', 'notdue', 'annual'].includes(x.st.s)).length, okN = cs.filter((x) => ['complete', 'late'].includes(x.st.s)).length;
         const cells = cs.filter((x) => ps.includes(x.p)).map((x) => show === 'sum'
-          ? `<td class="c ${x.st.s}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}</td>`
+          ? `<td class="c ${x.st.s}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" data-tip="${esc(tipOf(x.st, (x.st.ents || []).filter((c) => !isIn(c)).map((c) => c.part)))}">${MARK[x.st.s]}</td>`
           : docs.map((d) => { const e = (x.st.ents || []).find((c) => c.part === d.key), m = docMark(x.st, e, d, now);
-              return `<td class="c dc ${m.c}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" title="${esc(d.name + ': ' + m.t)}">${m.m}</td>`; }).join('')).join('');
+              return `<td class="c dc ${m.c}" data-acell="${esc(o.id)}|${li}|${esc(x.p)}" data-tip="${esc(docTip(x.st, e, d, m))}">${m.m}</td>`; }).join('')).join('');
         return `<tr data-off="${esc(o.id)}" data-find="${esc((line + ' ' + o.label).toLowerCase())}"><th>${esc(line)}</th>${cells}
           <td class="acct-n"><small>${okN} of ${dueN}</small></td></tr>`;
       }).join('');
@@ -522,8 +549,9 @@ function monitorHtml(refs, rms, q) {
       <div class="mon-sum">${pill('✓ Complete ' + (tally.complete || 0), 'ok')}${pill('L Late ' + (tally.late || 0), 'late')}${pill('V For verification ' + (tally.verify || 0), 'blue')}${pill('M Missing documents ' + (tally.incomplete || 0), 'warn')}${pill('! Overdue ' + (tally.overdue || 0), 'bad')}${pill('· Not yet due ' + ((tally.notdue || 0) + (tally.nodue || 0)))}${tally.untracked ? pill('— Before monitoring ' + tally.untracked) : ''}${tally.annual ? pill('A Replaced by the annual report ' + tally.annual) : ''}</div>
       ${shown.length ? `<div class="mon-wrap"><table class="mon${disp === 'sum' ? '' : ' withdocs'}"><thead>${groupRow}${mode === 'month' ? headRows('Office · Code', columns, docs, disp, '') : `<tr><th>Office · Code</th>${columns.map((c) => `<th>${esc(c.head)}</th>`).join('')}</tr>`}</thead><tbody>
         ${shown.map((g) => `<tr><th><b>${esc(g.o.label)}</b><small class="mono">${esc(g.o.code || 'no office code')}</small>${multi && tf === 'all' ? `<small> · ${esc(refs.team[g.o.teamId]?.data.name || '')}</small>` : ''}</th>${g.cs.map((x) => !x.st ? (disp === 'sum' ? '<td class="c na"></td>' : docs.map(() => '<td class="c na"></td>').join(''))
-          : disp === 'sum' ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(STATUS_TEXT[x.st.s])}">${MARK[x.st.s]}${countOf(x)}</td>`
-          : docs.map((d) => { const m = periodDocMark(g.o, x, d, now); return `<td class="c dc ${m.c}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" title="${esc(d.name + ': ' + m.t)}">${m.m}</td>`; }).join('')).join('')}</tr>`).join('')}
+          : disp === 'sum' ? `<td class="c ${x.st.s}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" data-tip="${esc(tipOf(x.st, ((x.st.agg && x.st.agg.checklist) || []).filter((c) => !isIn(c)).map((c) => c.item)))}">${MARK[x.st.s]}${countOf(x)}</td>`
+          : docs.map((d) => { const m = periodDocMark(g.o, x, d, now); const e = !x.c.r.perOffice ? ((x.st.agg && x.st.agg.checklist) || []).find((c) => c.item === d.key) : null;
+              return `<td class="c dc ${m.c}" data-cell="${esc(g.o.id)}|${esc(x.c.r.id)}|${esc(x.c.p)}" data-tip="${esc(docTip(x.st, e, d, m))}">${m.m}</td>`; }).join('')).join('')}</tr>`).join('')}
         </tbody></table></div>${disp === 'sum' ? '' : docKey(docs)}`
         : `<div class="empty"><b>${rows.length ? 'Nothing to show for this filter' : 'No office submits this report yet'}</b>${rows.length ? 'Try Show: All offices.' : 'Tick the report for the offices in Office Setup.'}</div>`}
       <div class="note">Monitoring starts with ${esc(periodLabel(rms.startPeriod))}; earlier periods show “—”. ${mode === 'month' ? esc(r.code + ' is ' + r.frequency.toLowerCase() + ', due ' + dueText(r).toLowerCase() + '.') : 'Quarterly, semi-annual and annual reports show the period that includes the chosen month.'}</div>
@@ -535,6 +563,21 @@ function wireMonitor(refs, rms, q) {
   $$('[data-f]').forEach((s) => { s.onchange = () => {
     const p = new URLSearchParams(location.hash.split('?')[1] || ''); p.set(s.dataset.f, s.value); location.hash = '#/rms/monitor?' + p.toString(); }; });
   const pr = $('#mon-print'); if (pr) pr.onclick = () => window.print();
+  // Hover bubble: the tracking number(s) of the cell.
+  let tip = document.getElementById('mon-tip');
+  if (!tip) { tip = document.createElement('div'); tip.id = 'mon-tip'; tip.className = 'mon-tip'; tip.hidden = true; document.body.appendChild(tip); }
+  tip.hidden = true;
+  const tbl = $('table.mon');
+  if (tbl) {
+    tbl.addEventListener('mouseover', (e) => { const td = e.target.closest('td.c[data-tip]'); if (!td || !td.dataset.tip) return;
+      tip.innerHTML = td.dataset.tip; tip.hidden = false;
+      const r = td.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+      let x = r.left + r.width / 2 - w / 2; x = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+      const above = r.top - h - 8 >= 8;
+      tip.style.left = x + 'px'; tip.style.top = (above ? r.top - h - 8 : r.bottom + 8) + 'px'; tip.classList.toggle('below', !above); });
+    tbl.addEventListener('mouseout', (e) => { if (!e.relatedTarget || !e.relatedTarget.closest || e.relatedTarget.closest('td.c[data-tip]') !== e.target.closest('td.c[data-tip]')) tip.hidden = true; });
+    window.addEventListener('scroll', () => { tip.hidden = true; }, { passive: true, capture: true });
+  }
   // Download ▾ PDF / Excel / Word of what is on screen.
   const dl = $('#mon-dl'), menu = $('#mon-dl-menu');
   if (dl) {
