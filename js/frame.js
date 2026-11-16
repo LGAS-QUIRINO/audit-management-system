@@ -13,7 +13,11 @@ const ICONS = {
   swap: '<path d="M7 7h10v10H7z"/><path d="M17 12h4M3 12h4"/>',
   library: '<path d="M4 19V5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2z"/>',
   building: '<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>',
-  pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/>'
+  pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  folder: '<path d="M3 6h7l2 2h9v11H3z"/>',
+  pin: '<path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  stack: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  shelf: '<path d="M4 3v18M20 3v18M4 9h16M4 15h16M4 21h16"/>'
 };
 const icon = (k) => `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${ICONS[k] || ICONS.grid}</svg>`;
 

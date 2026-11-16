@@ -8,6 +8,7 @@ import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { pdfToLines, parseDetails } from './pdfread.js';
 import { DEMO } from '../../js/config.js';
 import { syncNow } from '../../js/sync.js';
+import { locationOf } from './storage.js';
 import { scopesFor, visibleOffices, periodsOf, periodLabel, dueDate, span, fmtDT, fmtDate, jobOrderOnly, hasRole, byAnnual } from './rms.js';
 
 const by = (refs) => refs.me?.data.email || '';
@@ -950,7 +951,7 @@ async function addLate(refs, rms, id) {
 }
 
 /* ---------- view one item ---------- */
-async function viewItem(refs, rms, id) {
+export async function viewItem(refs, rms, id) {
   const i = rms.items.find((x) => x.id === id);
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   const row = (k, v) => `<div class="kvrow"><small>${k}</small><span>${v}</span></div>`;
@@ -959,6 +960,7 @@ async function viewItem(refs, rms, id) {
     ${row('Received', esc(fmtDate(i.receivedAt) + ', ' + new Date(i.receivedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) + ' by ' + esc(i.receivedByName)
       + (encodedLater(i) ? `<br><small>Encoded later: ${esc(fmtDT(i.encodedAt))}</small>` : ''))}
     ${row('Received from', esc(i.submittedBy) + (i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''))}
+    ${i.trackingNo ? row('Location', (() => { const l = locationOf(rms, i); return l ? `📁 ${esc(l.text)}` : '<small>Not yet filed</small> · <a href="#/rms/unfiled">File it</a>'; })()) : ''}
     ${i.pendingCode && i.trackingNo ? row('Pending code', `<span class="mono">${esc(i.pendingCode)}</span>`) : ''}
     ${i.checklist && i.batchId ? batchOf(rms, i).map((x) => row(esc(periodLabel(x.period)), statusPill(x) + transmittalHtml(x, periodOf(rms, x)))).join('')
       : i.checklist ? row('This transmittal', transmittalHtml(i, periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i))) : ''}

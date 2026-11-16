@@ -6,8 +6,9 @@ import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { download } from './export.js';
+import { foldersHtml, wireFolders, unfiledHtml, wireUnfiled, unfiledCount, locationHtml, wireLocation, storageHtml, wireStorage, locationOf } from './storage.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
-import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText } from './receiving.js';
+import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText, viewItem } from './receiving.js';
 
 // Load this module's look once.
 if (!document.querySelector('link[data-rms]')) {
@@ -50,11 +51,15 @@ function canEditMun(refs, munTeamId, munId) {
 async function loadRms() {
   const [reports, offices, items, settings, groups, psaoSet] = await Promise.all([store.list('rms_reports'), store.list('rms_offices'), store.list('rms_items'), store.get('rms_settings', 'office'), store.get('rms_settings', 'groups'), store.get('rms_settings', 'psao')]);
   const isPsao = (i) => i.data && (i.data.kind === 'psao-in' || i.data.kind === 'psao-out');
+  // Records & Storage: rooms, cabinets/shelves/sacks and folders (kept in the same database list).
+  const isStore = (i) => i.data && String(i.data.kind || '').startsWith('store-');
+  const ofKind = (k) => items.filter((i) => i.data && i.data.kind === k).map((i) => ({ id: i.id, ...i.data }));
   const now = new Date();
   return { reports: reports.map((r) => ({ id: r.id, ...r.data })), offices: offices.map((o) => ({ id: o.id, ...o.data })),
     // _new: received on this computer but not yet sent to the AMS database (its number is not yet confirmed).
     // Received items (Incoming) and sent items (Outgoing, kind 'out') are kept in the same list in the database.
-    items: items.filter((i) => i.data && i.data.kind !== 'out' && !isPsao(i)).map((i) => ({ id: i.id, ...unpackItem(i.data), ...(i.pending && !i.version ? { _new: true } : {}) })),
+    rooms: ofKind('store-room'), places: ofKind('store-place'), folders: ofKind('store-folder'),
+    items: items.filter((i) => i.data && i.data.kind !== 'out' && !isPsao(i) && !isStore(i)).map((i) => ({ id: i.id, ...unpackItem(i.data), ...(i.pending && !i.version ? { _new: true } : {}) })),
     outs: items.filter((i) => i.data && i.data.kind === 'out').map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
     // The PSAO's own books (PSAO Incoming 'psao-in', PSAO Outgoing 'psao-out') and its document types.
     psao: items.filter(isPsao).map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
@@ -176,16 +181,22 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
   const psao = canPsao(refs) ? [{ section: true, label: 'PSAO' },
     { key: 'psao-in', label: 'Incoming', icon: 'inbox', href: '#/rms/psao-in', count: routingCount(refs, rms) },
     { key: 'psao-out', label: 'Outgoing', icon: 'book', href: '#/rms/psao-out', count: psaoAwaiting(rms) }] : [];
+  const storage = [{ section: true, label: 'RECORDS & STORAGE' },
+    { key: 'folders', label: 'Folders', icon: 'folder', href: '#/rms/folders' },
+    { key: 'unfiled', label: 'Not Yet Filed', icon: 'stack', href: '#/rms/unfiled', count: unfiledCount(refs, rms) },
+    { key: 'location', label: 'Location', icon: 'pin', href: '#/rms/location' },
+    { key: 'storage', label: 'Storage Setup', icon: 'shelf', href: '#/rms/storage' }];
   if (psaoOnly(refs)) return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
     { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
     ...psao,
+    ...storage,
     { section: true, label: 'SETUP' },
     { key: 'library', label: 'Report Library', icon: 'library', href: '#/rms/setup/library' }];
   if (jobOrderOnly(refs)) return [
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving' },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
-    { key: 'records', label: 'Records & Storage', icon: 'box', soon: true },
+    ...storage,
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true }];
   return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
@@ -193,9 +204,9 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
     ...(psao.length ? [{ section: true, label: 'TEAM BOOKS' }] : []),
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
-    { key: 'records', label: 'Records & Storage', icon: 'box', soon: true },
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true },
     ...psao,
+    ...storage,
     { section: true, label: 'SETUP' },
     { key: 'library', label: 'Report Library', icon: 'library', href: '#/rms/setup/library' },
     { key: 'offices', label: 'Office Setup', icon: 'building', href: '#/rms/setup/offices' }];
@@ -209,17 +220,22 @@ export async function render(ctx) {
   let view = parts[0] || 'overview';
   if (view === 'setup') view = parts[1] === 'offices' ? 'offices' : 'library';
   if (view === 'incoming') view = 'receiving';
-  if (jo && !['receiving', 'outgoing'].includes(view)) view = 'receiving';
+  const STORE_VIEWS = ['folders', 'unfiled', 'location', 'storage'];
+  if (jo && !['receiving', 'outgoing', ...STORE_VIEWS].includes(view)) view = 'receiving';
   if (['psao-in', 'psao-out'].includes(view) && !canPsao(refs)) view = 'overview';
   if (psaoOnly(refs) && ['receiving', 'outgoing', 'offices'].includes(view)) view = view === 'outgoing' ? 'psao-out' : view === 'offices' ? 'library' : 'psao-in';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
   const pendingN = (jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length) + waitingForMe(refs, rms).length;
   const body = view === 'receiving' ? receivingHtml(refs, rms, q).replace('id="rcv-new">+ Receive Documents</button></div>', (m) => m + fromPsaoHtml(refs, rms))
     : view === 'outgoing' ? outgoingHtml(refs, rms, q)
     : view === 'psao-in' ? psaoInHtml(refs, rms, q)
     : view === 'psao-out' ? outgoingHtml(refs, rms, q, true)
+    : view === 'folders' ? foldersHtml(refs, rms, q)
+    : view === 'unfiled' ? unfiledHtml(refs, rms, q)
+    : view === 'location' ? locationHtml(refs, rms, q)
+    : view === 'storage' ? storageHtml(refs, rms, q)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
@@ -235,6 +251,10 @@ export async function render(ctx) {
   else if (view === 'outgoing') wireOutgoing(refs, rms, q);
   else if (view === 'psao-in') wirePsaoIn(refs, rms, q);
   else if (view === 'psao-out') wireOutgoing(refs, rms, q, true);
+  else if (view === 'folders') wireFolders(refs, rms, q);
+  else if (view === 'unfiled') wireUnfiled(refs, rms, q);
+  else if (view === 'location') wireLocation(refs, rms, q, (id) => viewItem(refs, rms, id));
+  else if (view === 'storage') wireStorage(refs, rms, q);
 }
 
 /* ================= Overview ================= */
@@ -382,8 +402,10 @@ function tipOf(st, miss = []) {
   const batch = recs.find((r) => r.batchPeriods && r.batchPeriods.length > 1);
   const when = recs.length > 1 ? `${seen.size > 1 ? seen.size + ' transmittals · last ' : ''}received ${fmtDate(last.receivedAt)}` : `received ${fmtDate(last.receivedAt)}`;
   const how = st.s === 'late' ? ` · ${due} (late)` : st.s === 'complete' && st.due ? ' · on time' : st.s === 'verify' ? ' · for verification' : '';
+  const loc = recs.map((r) => (r.virtual ? null : locationOf(RMS_NOW, r))).find(Boolean);
   return lines.join('<br>') + (batch ? `<br><small>${esc(periodsText(batch.batchPeriods))} in one transmittal</small>` : '')
-    + `<br><small>${esc(when + how)}</small>` + (st.s === 'incomplete' && miss.length ? `<br><small>missing: ${esc(miss.slice(0, 4).join(', '))}${miss.length > 4 ? ' and ' + (miss.length - 4) + ' more' : ''}</small>` : '');
+
+    + `<br><small>${esc(when + how)}</small>` + (loc ? `<br><small>📁 ${esc(loc.text)}</small>` : '') + (st.s === 'incomplete' && miss.length ? `<br><small>missing: ${esc(miss.slice(0, 4).join(', '))}${miss.length > 4 ? ' and ' + (miss.length - 4) + ' more' : ''}</small>` : '');
 }
 // The bubble of one document cell.
 const docTip = (st, e, d, m) => e && e.ok && e.from ? `<b>${esc(e.from)}</b><br><small>${esc(d.name)} · ${esc(m.t)}</small>`
@@ -485,7 +507,9 @@ function periodDocMark(o, x, d, now) {
   return { c: m.c === 'notdue' && n ? 'incomplete' : m.c, m: n ? `${n}/${total}` : m.m, t: `${n} of ${total} in` };
 }
 
+let RMS_NOW = { folders: [], places: [], rooms: [] };   // for the hover bubble's location line
 function monitorHtml(refs, rms, q) {
+  RMS_NOW = rms;
   // SA, OSA Staff and Admin see every team: a Team filter narrows the municipalities.
   const allScopes = scopesFor(refs);
   const multi = seesAllTeams(refs) && refs.teams.length > 1;
