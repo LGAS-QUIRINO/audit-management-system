@@ -995,8 +995,8 @@ export async function viewItem(refs, rms, id) {
       : i.checklist ? row('This transmittal', transmittalHtml(i, periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i))) : ''}
     ${row('History', historyHtml(i))}
     ${i.remarks ? row('Remarks', esc(i.remarks)) : ''}`,
-    buttons: [{ label: 'Close', value: null, cls: canCorrect(refs) && !i._new ? '' : 'primary' }, ...(canCorrect(refs) && !i._new ? [{ label: 'Correct', cls: 'primary', value: 'fix' }] : [])] })
-    .then((v) => { if (v === 'fix') correctItem(refs, rms, id); });
+    buttons: [{ label: 'Close', value: null, cls: canCorrect(refs) && !i._new ? '' : 'primary' }, ...(canCombine(refs) ? [{ label: 'Delete…', value: 'del' }] : []), ...(canCorrect(refs) && !i._new ? [{ label: 'Correct', cls: 'primary', value: 'fix' }] : [])] })
+    .then((v) => { if (v === 'fix') correctItem(refs, rms, id); if (v === 'del') deleteItem(refs, rms, id); });
 }
 
 /* ---------- combining records of the same period (Admin only) ---------- */
@@ -1063,7 +1063,14 @@ async function correctItem(refs, rms, id) {
         <select class="input" id="c-batch">${batch.map((x) => `<option value="${x.id}" ${x.id === i.id ? 'selected' : ''}>${esc(periodLabel(x.period))}</option>`).join('')}</select></div>` : ''}
       <div class="two"><div class="field"><label for="c-date">Date received</label><input class="input" type="datetime-local" id="c-date" value="${localInput(i.receivedAt)}" max="${localInput(new Date())}"></div>
         ${isRep ? `<div class="field"><label for="c-per">Period</label><select class="input" id="c-per">${periods.map((p) => `<option value="${p}" ${p === i.period ? 'selected' : ''}>${esc(periodLabel(p))}</option>`).join('')}</select></div>`
-          : `<div class="field"><label for="c-subj">Subject</label><input class="input" id="c-subj" value="${esc(i.subject || '')}"></div>`}</div>
+          : `<div class="field"><label for="c-subj">${i.kind === 'other' ? 'Title / description' : 'Subject'}</label><input class="input" id="c-subj" value="${esc(i.subject || '')}"></div>`}</div>
+      ${i.kind === 'other' ? (() => { const types = rms.otherTypes || [], cur = types.find((t) => t.code === i.reportCode);
+        return `<div class="two"><div class="field"><label for="c-otype">Document type</label><select class="input" id="c-otype">${types.map((t) => `<option value="${esc(t.code)}" ${t.code === i.reportCode ? 'selected' : ''}>${esc(t.name)} (${esc(t.code)})</option>`).join('')}</select>
+            <span class="hint">A different type gives it a new number in that type's series.</span></div>
+          <div class="field" id="c-okind-box" ${(cur?.kinds || []).length ? '' : 'hidden'}><label for="c-okind">Kind</label><select class="input" id="c-okind">${(cur?.kinds || []).map((k) => `<option ${k === i.docKind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></div></div>
+        <div class="two"><div class="field"><label for="c-odoc">Document no.</label><input class="input" id="c-odoc" value="${esc(i.docNo || '')}"></div>
+          <div class="field"><label for="c-odate">Document date</label><input class="input" type="date" id="c-odate" value="${esc(i.docDate || '')}"></div></div>
+        <div class="field" style="max-width:220px"><label for="c-opages">Pages / Attachments</label><input class="input" id="c-opages" value="${esc(i.pages || '')}"></div>`; })() : ''}
       ${isRep && isGrouped(ck) ? `<div><span class="legend">Checklist per ${esc((i.lineLabel || 'account').toLowerCase())} · tick what was actually submitted</span>
         <div class="rcv-list">${linesOf(ck).length > 8 ? '<input class="input" id="c-find" placeholder="Search">' : ''}
           <div class="acc-list">${accordionHtml(ck, { name: 'cfix' })}</div>
@@ -1079,12 +1086,15 @@ async function correctItem(refs, rms, id) {
       <div class="field"><label for="c-why">Reason for the correction (required)</label><input class="input" id="c-why" placeholder="e.g. Encoder ticked GF-1234 by mistake; not in the bundle"></div>`,
     onOpen: (bg) => {
       if ($('#c-batch', bg)) $('#c-batch', bg).onchange = () => { switchTo = $('#c-batch', bg).value; $('.mf .btn', bg).click(); };
+      if ($('#c-otype', bg)) $('#c-otype', bg).onchange = () => { const t = (rms.otherTypes || []).find((x) => x.code === $('#c-otype', bg).value), ks = (t && t.kinds) || [];
+        $('#c-okind-box', bg).hidden = !ks.length; $('#c-okind', bg).innerHTML = ks.map((k) => `<option>${esc(k)}</option>`).join(''); };
       const st = () => { const all = $$('input[name=cfix]', bg); if (!all.length) return; const t = all.filter((x) => x.checked).length; $('#c-state', bg).textContent = `${t} of ${all.length} submitted`; };
       $$('input[name=cfix]', bg).forEach((x) => { x.onchange = st; }); st();
       if ($('#c-find', bg)) $('#c-find', bg).oninput = () => { const v = $('#c-find', bg).value.trim().toLowerCase(); $$('.rcv-items label[data-t], details.acc', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
       if ($('details.acc', bg)) wireAccordions(bg, 'cfix', st);
     },
     buttons: [{ label: 'Cancel', value: null }, ...(isRep ? [{ label: 'Move to Another Report…', value: 'move' }] : []),
+      ...(canCombine(refs) ? [{ label: 'Delete Record…', value: 'del' }] : []),
       ...(isRep && batch.length > 1 ? [{ label: 'Remove This Period', value: 'rmp' }] : []), ...(isRep ? [{ label: 'Add a Period…', value: 'addp' }] : []),
       { label: 'Save Correction', cls: 'primary', value: 'save', check: (bg) => {
       const why = $('#c-why', bg).value.trim();
@@ -1117,7 +1127,17 @@ async function correctItem(refs, rms, id) {
         patch.completedAt = done ? patch.checklist.reduce((m, c) => (c.at > m ? c.at : m), '') : '';
       } else {
         const subj = $('#c-subj', bg).value.trim(); if (!subj) { toast('Enter the subject.', 'bad'); return false; }
-        if (subj !== i.subject) { changes.push('subject'); patch.subject = subj; }
+        if (subj !== i.subject) { changes.push(i.kind === 'other' ? 'title' : 'subject'); patch.subject = subj; }
+        if (i.kind === 'other') {
+          const t = (rms.otherTypes || []).find((x) => x.code === $('#c-otype', bg).value);
+          if (t && t.code !== i.reportCode) { changes.push(`document type ${i.docTypeName || i.reportCode} → ${t.name}`); Object.assign(patch, { reportCode: t.code, docType: t.code, docTypeName: t.name }); }
+          const kind = t && (t.kinds || []).length ? $('#c-okind', bg).value : '';
+          if ((kind || '') !== (i.docKind || '')) { changes.push(`kind ${i.docKind || '—'} → ${kind || '—'}`); patch.docKind = kind; }
+          const dn = $('#c-odoc', bg).value.trim(), dd = $('#c-odate', bg).value, pg = $('#c-opages', bg).value.trim();
+          if (dn !== (i.docNo || '')) { changes.push('document no.'); patch.docNo = dn; }
+          if (dd !== (i.docDate || '')) { changes.push('document date'); patch.docDate = dd; }
+          if (pg !== (i.pages || '')) { changes.push('pages'); patch.pages = pg; }
+        }
       }
       const sb = $('#c-by', bg).value.trim(), sd = $('#c-des', bg).value.trim(), rem = $('#c-rem', bg).value.trim();
       if (!sb) { toast('Enter the name in Received From.', 'bad'); return false; }
@@ -1131,6 +1151,7 @@ async function correctItem(refs, rms, id) {
   if (res === 'move') return moveItem(refs, rms, id);
   if (res === 'addp') return addPeriod(refs, rms, id);
   if (res === 'rmp') return removePeriod(refs, rms, id);
+  if (res === 'del') return deleteItem(refs, rms, id);
   if (res !== 'save') return;
   const { id: _x, _new: _n, ...data } = i;
   const corrections = [...(i.corrections || []), { at: new Date().toISOString(), by: by(refs), byName: myName(refs), reason: out.why, changes: out.changes }];
@@ -1138,6 +1159,26 @@ async function correctItem(refs, rms, id) {
   if (!next.completedAt) delete next.completedAt;
   await saveItem(id, next, by(refs));
   toast('Correction saved and recorded in the history.', 'ok');
+}
+
+/* ---------- delete a record (Admin only) ---------- */
+// For a record encoded by mistake. Its number is not given again; the deletion stays in the database's log.
+// A transmittal of several periods is deleted whole.
+export async function deleteItem(refs, rms, id) {
+  if (!canCombine(refs)) return toast('Only the Admin can delete a record.', 'bad');
+  const i = rms.items.find((x) => x.id === id), all = i.batchId ? batchOf(rms, i) : [i];
+  const what = i.kind === 'comm' ? 'Communication · ' + (i.subject || '') : i.kind === 'other' ? (i.docKind || i.docTypeName || i.reportCode) + ' · ' + (i.subject || '')
+    : (i.reportCode || '') + ' · ' + (i.batchId ? periodsText(all.map((x) => x.period)) : periodLabel(i.period));
+  let why = '';
+  const res = await modal({ title: 'Delete ' + numberOf(i),
+    body: `<p>Delete <b class="mono">${esc(numberOf(i))}</b> · ${esc(what)}${all.length > 1 ? ` (all ${all.length} periods of this transmittal)` : ''}?</p>
+      <p class="hint">It disappears from Incoming, the Submission Monitor, folders and the Records Logbook. The number ${esc(numberOf(i))} is not given to another record. This cannot be undone here.</p>
+      <div class="field"><label for="del-why">Reason (required)</label><input class="input" id="del-why" placeholder="e.g. Encoded twice; wrong office"></div>`,
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Delete', cls: 'primary', value: 'go', check: (bg) => { why = $('#del-why', bg).value.trim(); if (!why) { toast('Enter the reason.', 'bad'); return false; } return true; } }] });
+  if (res !== 'go') return;
+  const at = new Date().toISOString();
+  for (const x of all) { const { id: xid, _new: _n, ...data } = x; await saveItem(xid, { ...data, deletedAt: at, deletedBy: by(refs), deletedByName: myName(refs), deletedReason: why }, by(refs), { deleted: true }); }
+  toast(`${numberOf(i)} deleted.`, 'ok');
 }
 
 /* ---------- add or remove a period of a transmittal (Admin and SA) ---------- */
