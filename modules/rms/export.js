@@ -64,19 +64,37 @@ export function screenInfo() {
     made: 'Downloaded ' + new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
   };
 }
-const fileName = (info, ext) => ('Submission Monitor ' + info.short).replace(/[^A-Za-z0-9 ()-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) + '.' + ext;
+const fileName = (info, ext) => (info.fileBase || 'Submission Monitor ' + info.short).replace(/[^A-Za-z0-9 ()-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) + '.' + ext;
 function save(blob, name) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
+// Options a page may give in info (e.g. the Records Logbook): legend (null = none), sign (signature lines), navy (navy column
+// headings), widths (relative column widths), align ('l'/'c' per column), sheet (Excel sheet name).
+const legendOf = (info) => (info.legend === undefined ? 'Legend: ' + LEGEND : info.legend);
+const headColor = (info) => (info.navy ? ['0B2A6B', 'FFFFFF'] : ['F6F8FC', '5B6785']);
+const signText = (info) => (info.sign || []).map((x) => `${x.role}: ${x.name || '______________________'}`).join('        ');
+const alignOf = (info, c, group) => (group ? 'left' : info.align ? (info.align[c] === 'c' ? 'center' : 'left') : c === 0 ? 'left' : 'center');
 const LEGEND = '✓ complete / on time · L late · V for verification · M missing documents · ✗ document missing · ! overdue · · not yet due (or optional, not attached) · – N/A · — before monitoring · A replaced by the annual report';
 
 /* ================= Excel ================= */
-async function toExcel(table, info) {
+async function toExcel(table, info) { return toExcelBook([{ table, info }], info); }
+// One workbook, one sheet per table (e.g. every logbook).
+export async function toExcelBook(sheets, bookInfo) {
   await loadScript('lib/exceljs.min.js');
-  const t = readTable(table), H = toGrid(t.head), B = toGrid(t.body), w = Math.max(H.w, B.w);
   const wb = new window.ExcelJS.Workbook(); wb.creator = 'AMS · COA Quirino';
-  const ws = wb.addWorksheet('Submission Monitor', { pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 5 } });
+  const used = new Set();
+  sheets.forEach(({ table, info }) => {
+    let name = String(info.sheet || 'Submission Monitor').replace(/[\\/?*[\]:]/g, ' ').slice(0, 31), k = 2;
+    while (used.has(name)) name = name.slice(0, 28) + ' ' + k++;
+    used.add(name); addSheet(wb, name, table, info);
+  });
+  const buf = await wb.xlsx.writeBuffer();
+  save(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName(bookInfo, 'xlsx'));
+}
+function addSheet(wb, name, table, info) {
+  const t = readTable(table), H = toGrid(t.head), B = toGrid(t.body), w = Math.max(H.w, B.w, 1);
+  const ws = wb.addWorksheet(name, { pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 5 } });
   const put = (r, text, opt = {}) => { ws.mergeCells(r, 1, r, w); const c = ws.getCell(r, 1); c.value = text; c.font = { bold: !!opt.bold, size: opt.size || 10, color: { argb: 'FF' + (opt.color || '1B2440') } }; c.alignment = { wrapText: true, vertical: 'top' }; };
   put(1, 'COMMISSION ON AUDIT · Province of Quirino', { bold: true, size: 11, color: '0B2A6B' });
   put(2, info.title, { bold: true, size: 14, color: '0B2A6B' });
@@ -95,23 +113,22 @@ async function toExcel(table, info) {
         if (g.cell.colspan > 1 || g.cell.rowspan > 1) ws.mergeCells(rr, c + 1, rr + g.cell.rowspan - 1, c + g.cell.colspan);
         const first = c === 0;
         cell.value = g.cell.text;
-        const [fill, color] = COLORS[g.cell.status] || [head || g.cell.group ? 'F6F8FC' : 'FFFFFF', head ? '5B6785' : '1B2440'];
+        const [fill, color] = COLORS[g.cell.status] || (head ? headColor(info) : [g.cell.group ? 'F6F8FC' : 'FFFFFF', '1B2440']);
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + (g.cell.group ? 'EEF2FA' : fill) } };
-        cell.font = { bold: head || g.cell.group || !!g.cell.status, size: head ? 9 : 10, color: { argb: 'FF' + color } };
-        cell.alignment = { horizontal: first || g.cell.group ? 'left' : 'center', vertical: 'middle', wrapText: true };
+        cell.font = { bold: head || g.cell.group || !!g.cell.status, size: head ? 9 : 10, color: { argb: 'FF' + (g.cell.group ? '0B2A6B' : color) } };
+        cell.alignment = { horizontal: head ? 'center' : alignOf(info, c, g.cell.group), vertical: head ? 'middle' : 'top', wrapText: true };
       });
     });
     r0 += G.grid.length;
   };
   write(H, true); const headEnd = r0 - 1; write(B, false);
-  ws.getColumn(1).width = 38;
-  for (let c = 2; c <= w; c++) ws.getColumn(c).width = c === w ? 11 : w > 16 ? 7 : 10;
-  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: headEnd }];
-  r0++; put(r0++, 'Legend: ' + LEGEND, { color: '5B6785', size: 9 });
+  if (info.widths) info.widths.forEach((wd, c) => { ws.getColumn(c + 1).width = wd; });
+  else { ws.getColumn(1).width = 38; for (let c = 2; c <= w; c++) ws.getColumn(c).width = c === w ? 11 : w > 16 ? 7 : 10; }
+  ws.views = [{ state: 'frozen', xSplit: info.widths ? 0 : 1, ySplit: headEnd }];
+  r0++; if (legendOf(info)) put(r0++, legendOf(info), { color: '5B6785', size: 9 });
   info.notes.forEach((n) => put(r0++, n, { color: '5B6785', size: 9 }));
+  if (info.sign) { r0++; put(r0++, signText(info), { size: 10 }); }
   put(r0, info.made, { color: '9AA5BD', size: 9 });
-  const buf = await wb.xlsx.writeBuffer();
-  save(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName(info, 'xlsx'));
 }
 
 /* ================= PDF ================= */
@@ -123,20 +140,22 @@ async function toPdf(table, info) {
   const pw = doc.internal.pageSize.getWidth();
   // ✓ and ✗ are drawn (the built-in PDF fonts have no such signs); other marks are plain letters.
   const pdfText = (s) => s === '✓' || s === '✗' ? '' : s.replace(/✓/g, 'ok').replace(/✗/g, 'x');
-  const conv = (rows, head) => rows.map((row) => row.map((c, k) => {
-    const [fill, color] = COLORS[c.status] || [head || c.group ? 'F6F8FC' : 'FFFFFF', head ? '5B6785' : '1B2440'];
+  const conv = (rows, head) => rows.map((row) => { let col = 0; return row.map((c) => { const k = col; col += c.colspan;
+    const [fill, color] = COLORS[c.status] || (head ? headColor(info) : [c.group ? 'F6F8FC' : 'FFFFFF', '1B2440']);
     const hex = (h) => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
     return { content: pdfText(c.text), colSpan: c.colspan, rowSpan: c.rowspan, mark: c.text,
-      styles: { fillColor: hex(c.group ? 'EEF2FA' : fill), textColor: hex(color), fontStyle: head || c.group || c.status ? 'bold' : 'normal', halign: k === 0 || c.group ? 'left' : 'center' } };
-  }));
+      styles: { fillColor: hex(c.group ? 'EEF2FA' : fill), textColor: hex(c.group ? '0B2A6B' : color), fontStyle: head || c.group || c.status ? 'bold' : 'normal', halign: head ? 'center' : alignOf(info, k, c.group) } };
+  }); });
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(11, 42, 107); doc.text('COMMISSION ON AUDIT · Province of Quirino', 36, 34);
   doc.setFontSize(14); doc.text(info.title, 36, 52);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(91, 103, 133);
-  const lines = doc.splitTextToSize(pdfText(info.filters) + '\n' + pdfText(info.counts), pw - 72); doc.text(lines, 36, 66);
+  const lines = doc.splitTextToSize(pdfText(info.filters) + (info.counts ? '\n' + pdfText(info.counts) : ''), pw - 72); doc.text(lines, 36, 66);
+  const usable = pw - 72, tw = info.widths ? info.widths.reduce((a, b) => a + b, 0) : 0;
+  const colStyles = info.widths ? Object.fromEntries(info.widths.map((wd, c) => [c, { cellWidth: usable * wd / tw }])) : { 0: { cellWidth: w > 16 ? 150 : 190 } };
   doc.autoTable({
     head: conv(t.head, true), body: conv(t.body, false), startY: 66 + lines.length * 11 + 6, theme: 'grid',
     styles: { fontSize: w > 24 ? 6 : w > 14 ? 7 : 8, cellPadding: 3, lineColor: [223, 229, 241], lineWidth: 0.5, valign: 'middle', overflow: 'linebreak' },
-    columnStyles: { 0: { cellWidth: w > 16 ? 150 : 190 } }, margin: { left: 36, right: 36 },
+    columnStyles: colStyles, margin: { left: 36, right: 36 },
     didDrawCell: (d) => {
       const m = d.cell.raw && d.cell.raw.mark; if (m !== '✓' && m !== '✗') return;
       const x = d.cell.x + d.cell.width / 2, y = d.cell.y + d.cell.height / 2, s = Math.min(4, d.cell.height / 4);
@@ -149,8 +168,16 @@ async function toPdf(table, info) {
   });
   let y = doc.lastAutoTable.finalY + 14; const h = doc.internal.pageSize.getHeight();
   doc.setFontSize(7.5); doc.setTextColor(91, 103, 133);
-  [('Legend: ' + LEGEND).replace(/✓/g, 'ok').replace(/✗/g, 'x'), ...info.notes.map(pdfText)].forEach((n) => {
+  [legendOf(info) && legendOf(info).replace(/✓/g, 'ok').replace(/✗/g, 'x'), ...info.notes.map(pdfText)].filter(Boolean).forEach((n) => {
     const ls = doc.splitTextToSize(n, pw - 72); if (y + ls.length * 9 > h - 30) { doc.addPage(); y = 40; } doc.text(ls, 36, y); y += ls.length * 9 + 3; });
+  if (info.sign) {
+    if (y + 60 > h - 30) { doc.addPage(); y = 40; }
+    const n = info.sign.length, gap = 24, cw = (pw - 72 - gap * (n - 1)) / n; y += 34;
+    doc.setDrawColor(17, 17, 17); doc.setLineWidth(0.7); doc.setTextColor(17, 17, 17);
+    info.sign.forEach((sgn, k) => { const x0 = 36 + k * (cw + gap); doc.line(x0, y, x0 + cw, y);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); if (sgn.name) doc.text(sgn.name, x0 + cw / 2, y - 4, { align: 'center' });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.text(sgn.role, x0 + cw / 2, y + 10, { align: 'center' }); });
+  }
   doc.save(fileName(info, 'pdf'));
 }
 
@@ -161,24 +188,27 @@ async function toWord(table, info) {
   const t = readTable(table), H = toGrid(t.head), B = toGrid(t.body), w = Math.max(H.w, B.w);
   const legal = w > 16, pageW = legal ? 20160 : 15840, pageH = 12240, margin = 720, usable = pageW - 2 * margin;
   const firstW = Math.round(usable * (w > 16 ? 0.2 : 0.3)), otherW = Math.floor((usable - firstW) / Math.max(1, w - 1));
+  const tw = info.widths ? info.widths.reduce((a, b) => a + b, 0) : 0;
+  const colW = (c) => (info.widths ? Math.floor(usable * (info.widths[c] || 1) / tw) : c === 0 ? firstW : otherW);
   const sz = w > 24 ? 12 : w > 14 ? 14 : 16;   // half-points
   const para = (text, { bold = false, size = 18, color = '1B2440', align = 'left' } = {}) =>
     `<w:p><w:pPr><w:spacing w:after="40"/><w:jc w:val="${align}"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${bold ? '<w:b/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${size}"/></w:rPr><w:t xml:space="preserve">${x(text)}</w:t></w:r></w:p>`;
   const rowsXml = (G, head) => G.grid.map((row) => `<w:tr>${head ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${row.map((g, c) => {
     if (!g || !g.left) return '';
-    const cell = g.cell, [fill, color] = COLORS[cell.status] || [head || cell.group ? 'F6F8FC' : 'FFFFFF', head ? '5B6785' : '1B2440'];
+    const cell = g.cell, [fill, color0] = COLORS[cell.status] || (head ? headColor(info) : [cell.group ? 'F6F8FC' : 'FFFFFF', '1B2440']), color = cell.group ? '0B2A6B' : color0;
     const span = cell.colspan > 1 ? `<w:gridSpan w:val="${cell.colspan}"/>` : '';
     const vm = cell.rowspan > 1 ? (g.top ? '<w:vMerge w:val="restart"/>' : '<w:vMerge/>') : '';
-    const width = (c === 0 ? firstW : otherW) + (cell.colspan - 1) * otherW;
+    let width = 0; for (let j = 0; j < cell.colspan; j++) width += colW(c + j);
     const body = g.top ? `<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${head || cell.group || cell.status ? '<w:b/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${x(cell.text)}</w:t></w:r>` : '';
-    return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${span}${vm}<w:shd w:val="clear" w:color="auto" w:fill="${cell.group ? 'EEF2FA' : fill}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="${c === 0 || cell.group ? 'left' : 'center'}"/></w:pPr>${body}</w:p></w:tc>`;
+    return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${span}${vm}<w:shd w:val="clear" w:color="auto" w:fill="${cell.group ? 'EEF2FA' : fill}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="${head ? 'center' : alignOf(info, c, cell.group)}"/></w:pPr>${body}</w:p></w:tc>`;
   }).join('')}</w:tr>`).join('');
   const bd = (k) => `<w:${k} w:val="single" w:sz="4" w:space="0" w:color="DFE5F1"/>`;
   const tbl = `<w:tbl><w:tblPr><w:tblW w:w="${usable}" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(bd).join('')}</w:tblBorders><w:tblCellMar><w:left w:w="50" w:type="dxa"/><w:right w:w="50" w:type="dxa"/></w:tblCellMar></w:tblPr>
-    <w:tblGrid><w:gridCol w:w="${firstW}"/>${Array.from({ length: w - 1 }, () => `<w:gridCol w:w="${otherW}"/>`).join('')}</w:tblGrid>${rowsXml(H, true)}${rowsXml(B, false)}</w:tbl>`;
+    <w:tblGrid>${Array.from({ length: w }, (_, c) => `<w:gridCol w:w="${colW(c)}"/>`).join('')}</w:tblGrid>${rowsXml(H, true)}${rowsXml(B, false)}</w:tbl>`;
   const body = para('COMMISSION ON AUDIT · Province of Quirino', { bold: true, size: 20, color: '0B2A6B' }) + para(info.title, { bold: true, size: 28, color: '0B2A6B' })
-    + para(info.filters, { size: 16, color: '5B6785' }) + para(info.counts, { size: 16, color: '5B6785' }) + tbl
-    + para('Legend: ' + LEGEND, { size: 14, color: '5B6785' }) + info.notes.map((n) => para(n, { size: 14, color: '5B6785' })).join('') + para(info.made, { size: 14, color: '9AA5BD' });
+    + para(info.filters, { size: 16, color: '5B6785' }) + (info.counts ? para(info.counts, { size: 16, color: '5B6785' }) : '') + tbl
+    + (legendOf(info) ? para(legendOf(info), { size: 14, color: '5B6785' }) : '') + info.notes.map((n) => para(n, { size: 14, color: '5B6785' })).join('')
+    + (info.sign ? signXml(info, usable) : '') + para(info.made, { size: 14, color: '9AA5BD' });
   const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}
     <w:sectPr><w:pgSz w:w="${pageW}" w:h="${pageH}" w:orient="landscape"/><w:pgMar w:top="${margin}" w:right="${margin}" w:bottom="${margin}" w:left="${margin}" w:header="360" w:footer="360" w:gutter="0"/></w:sectPr></w:body></w:document>`;
   const zip = new window.JSZip();
@@ -189,6 +219,22 @@ async function toWord(table, info) {
   save(blob, fileName(info, 'docx'));
 }
 
+// Signature lines (names above the line, roles below), as a borderless table.
+function signXml(info, usable) {
+  const n = info.sign.length, cw = Math.floor(usable / n);
+  const cell = (sg) => `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:tcMar><w:left w:w="200" w:type="dxa"/><w:right w:w="200" w:type="dxa"/></w:tcMar></w:tcPr>
+    <w:p><w:pPr><w:spacing w:before="600" w:after="0"/><w:jc w:val="center"/><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="111111"/></w:pBdr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/><w:sz w:val="17"/></w:rPr><w:t xml:space="preserve">${x(sg.name || ' ')}</w:t></w:r></w:p>
+    <w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="16"/></w:rPr><w:t xml:space="preserve">${x(sg.role)}</w:t></w:r></w:p></w:tc>`;
+  const none = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map((k) => `<w:${k} w:val="nil"/>`).join('');
+  return `<w:tbl><w:tblPr><w:tblW w:w="${usable}" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders>${none}</w:tblBorders></w:tblPr><w:tblGrid>${info.sign.map(() => `<w:gridCol w:w="${cw}"/>`).join('')}</w:tblGrid><w:tr>${info.sign.map(cell).join('')}</w:tr></w:tbl>`;
+}
+
+// Any table with its own heading and options (e.g. the Records Logbook).
+export async function downloadTable(kind, table, info) {
+  if (kind === 'xlsx') return toExcel(table, info);
+  if (kind === 'pdf') return toPdf(table, info);
+  if (kind === 'docx') return toWord(table, info);
+}
 // Download the table on screen in the chosen format.
 export async function download(kind, table) {
   const info = screenInfo();

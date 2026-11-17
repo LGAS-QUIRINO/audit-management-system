@@ -53,7 +53,7 @@ function setup() {
 
 /* ---------- web app ---------- */
 // Shown when the Web app URL is opened in a browser, to check which version is deployed.
-const SCRIPT_VERSION = '2026-11-11 · numbers fix themselves (year, codes)';
+const SCRIPT_VERSION = '2026-11-17 · other submissions (MOA, ordinance…)';
 function doGet() { return json_({ ok: true, app: 'AMS', version: SCRIPT_VERSION, time: new Date().toISOString() }); }
 
 function doPost(e) {
@@ -207,6 +207,13 @@ function checkItem_(c, cur, decider, isAdmin, corrector, psao) {
     const mate = rows.filter(function (r) { return r.id !== c.id && !r.deleted && r.data && r.data.batchId === d.batchId && r.data.trackingNo && (!want || String(r.data.trackingNo).indexOf(want.prefix) === 0); })[0];
     if (mate) { d.trackingNo = mate.data.trackingNo; d.series = mate.data.series; d.trackingYear = mate.data.trackingYear; d.seriesKey = mate.data.seriesKey; return; }
   }
+  // Other Submission types may start a year at a set number (numbering begun by hand), e.g. MOA 2026 at 0016.
+  if (d.kind === 'other') {
+    const st = readAll_('rms_settings').filter(function (r) { return r.id === 'othertypes' && r.data; })[0];
+    const t = st && (st.data.types || []).filter(function (x) { return x.code === d.reportCode; })[0];
+    const start = t && t.starts ? Number(t.starts[year]) || 0 : 0;
+    if (start > 1) n = start - 1;
+  }
   rows.forEach(function (r) {
     const x = r.data || {};
     if (r.id !== c.id && x.trackingNo && (x.seriesKey || x.officeId) === key && Number(x.trackingYear) === year) n = Math.max(n, Number(x.series) || 0);
@@ -226,6 +233,11 @@ function expected_(d) {
     codes_ = { rep: {}, off: {} };
     readAll_('rms_reports').forEach(function (r) { if (!r.deleted && r.data && r.data.code) codes_.rep[r.id] = r.data.code; });
     readAll_('rms_offices').forEach(function (r) { if (!r.deleted && r.data && r.data.code) codes_.off[r.id] = r.data.code; });
+  }
+  if (d.kind === 'other') {   // Other Submission (MOA, ordinance…): series per office, type and year
+    const oc = codes_.off[d.officeId] || d.officeCode, tc = d.reportCode, y = Number(d.trackingYear);
+    if (!oc || !tc || !y) return null;
+    return { prefix: oc + '-' + tc + '-' + y + '-', officeCode: oc, reportCode: tc, year: y, key: d.officeId + '|o:' + tc };
   }
   if (d.kind === 'comm') {
     const oc = d.officeId ? (codes_.off[d.officeId] || d.officeCode) : 'OUT', y = Number(d.trackingYear);
@@ -256,6 +268,7 @@ function renumberAll() {
     // The current report codes (Report Library) and office codes (Office Setup): a code changed later (e.g. FS → TB)
     // is given to the records already received.
     const repCode = {}, offCode = {};
+    const ots = readAll_('rms_settings').filter(function (r) { return r.id === 'othertypes' && r.data; })[0], otherTypes = (ots && ots.data.types) || [];
     readAll_('rms_reports').forEach(function (r) { if (!r.deleted && r.data && r.data.code) repCode[r.id] = r.data.code; });
     readAll_('rms_offices').forEach(function (r) { if (!r.deleted && r.data && r.data.code) offCode[r.id] = r.data.code; });
     const groups = {};
@@ -264,7 +277,7 @@ function renumberAll() {
       if (!d.trackingNo || ['out', 'psao-in', 'psao-out'].indexOf(d.kind) >= 0) return;
       if (d.kind !== 'comm' && repCode[d.reportId] && repCode[d.reportId] !== d.reportCode) { d.reportCode = repCode[d.reportId]; x.codeChanged = true; }
       if (d.officeId && offCode[d.officeId] && offCode[d.officeId] !== d.officeCode) { d.officeCode = offCode[d.officeId]; x.codeChanged = true; }
-      const key = d.kind === 'comm' ? (d.officeId || 'outside') : d.officeId + '|' + d.reportCode;
+      const key = d.kind === 'comm' ? (d.officeId || 'outside') : d.kind === 'other' ? d.officeId + '|o:' + d.reportCode : d.officeId + '|' + d.reportCode;
       const g = key + '#' + d.trackingYear;
       (groups[g] = groups[g] || { key: key, list: [] }).list.push(x);
     });
@@ -281,8 +294,11 @@ function renumberAll() {
         const a = first(ua), b = first(ub);
         return String(a.rec.data.receivedAt).localeCompare(String(b.rec.data.receivedAt)) || String(a.rec.data.encodedAt || '').localeCompare(String(b.rec.data.encodedAt || '')) || a.row - b.row;
       });
+      // Other Submission types may start the year at a set number.
+      const d0 = first(grp.units[0]).rec.data, ot = d0.kind === 'other' ? (otherTypes.filter(function (t) { return t.code === d0.reportCode; })[0] || {}) : {};
+      const base = ot.starts && Number(ot.starts[d0.trackingYear]) > 1 ? Number(ot.starts[d0.trackingYear]) - 1 : 0;
       grp.units.forEach(function (u, i) { u.members.forEach(function (x) {
-        const d = x.rec.data, s = i + 1;
+        const d = x.rec.data, s = base + i + 1;
         const code = d.kind === 'comm' && !d.officeId ? 'OUT' : d.officeCode;
         const no = [code, d.kind === 'comm' ? '' : d.reportCode, d.trackingYear, ('000' + s).slice(-4)].filter(function (v) { return v !== '' && v !== undefined && v !== null; }).join('-');
         if (no === d.trackingNo && d.series === s && d.seriesKey === grp.key && !x.codeChanged) return;

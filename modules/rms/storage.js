@@ -7,7 +7,8 @@
 import { store, newId } from '../../js/store.js';
 import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { hasRole, fmtDate, periodLabel, visibleOffices, scopesFor } from './rms.js';
-import { numberOf, saveItem, batchOf, isBatchLead, periodsText } from './receiving.js';
+import { numberOf, saveItem, batchOf, isBatchLead, periodsText, isRepItem } from './receiving.js';
+import { downloadTable, toExcelBook } from './export.js';
 
 const by = (refs) => refs.me?.data.email || '';
 const myName = (refs) => refs.me?.data.name || '';
@@ -54,10 +55,22 @@ function teamFiles(refs, rms, teamId) {
 }
 function describe(rms, offs, i) {
   const off = offs.find((o) => o.id === i.officeId);
-  const what = i.kind === 'comm' ? 'Communication · ' + (i.subject || '') : (i.reportCode || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period));
+  const what = i.kind === 'comm' ? 'Communication · ' + (i.subject || '') : i.kind === 'other' ? (i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '') + (i.docNo ? ' · ' + i.docNo : '') : (i.reportCode || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period));
   return { office: i.fromOutside || off?.label || '', what };
 }
 const findText = (rms, offs, i) => { const d = describe(rms, offs, i); return [numberOf(i), d.office, d.what, i.reportCode, ...(i.batchId ? batchOf(rms, i).map((x) => periodLabel(x.period)) : [i.period && periodLabel(i.period)]), i.subject].filter(Boolean).join(' ').toLowerCase(); };
+
+// Soft copy location (a link or a path), on the file or else on its folder.
+export const softOf = (rms, i) => (i && i.softCopy) || (i && i.folderId && rms.folders.find((f) => f.id === i.folderId)?.softCopy) || '';
+export const softHtml = (v, short = true) => { if (!v) return '<small class="hint">—</small>'; const t = short && v.length > 48 ? v.slice(0, 45) + '…' : v;
+  return /^https?:\/\//i.test(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(t)}</a>` : esc(t); };
+async function editSoft(refs, title, cur, hint) {
+  let v = null;
+  const res = await modal({ title: 'Soft Copy Location · ' + title,
+    body: `<div class="field"><label for="sc-v">Where the scanned file(s) are kept (link or path)</label><input class="input" id="sc-v" value="${esc(cur || '')}" placeholder="e.g. https://drive.google.com/… or AMS Drive › BRS 2026 › January"></div><p class="hint">${hint}</p>`,
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Save', cls: 'primary', value: 'save', check: (bg) => { v = $('#sc-v', bg).value.trim(); return true; } }] });
+  return res === 'save' ? v : null;
+}
 
 // The place of a folder as a pill (amber "No location yet" when not placed).
 const wherePill = (w) => w.place ? `${pill(placeName(w.place), w.place.type === 'sack' ? 'sack' : 'blue')} <small>${esc(w.room?.name || '')}</small>` : pill('No location yet', 'warn');
@@ -106,21 +119,22 @@ function folderHtml(refs, rms, q, team) {
   // Suggested: files not yet filed of the same offices and reports as those already in this folder.
   const keys = new Set(files.map((x) => x.officeId + '|' + (x.reportId || 'comm')));
   const sugg = keys.size ? teamFiles(refs, rms, f.teamId).filter((i) => !i.folderId && keys.has(i.officeId + '|' + (i.reportId || 'comm'))) : [];
-  const cols = 'grid-template-columns:minmax(200px,1.1fr) minmax(220px,1.5fr) 120px 130px 170px';
+  const cols = 'grid-template-columns:minmax(190px,1fr) minmax(210px,1.4fr) 110px minmax(130px,1fr) 120px 240px';
   return `<div class="hello"><div><p><a href="#/rms/folders?t=${f.teamId}">← Folders</a></p><h1 class="mono">${esc(f.code)}</h1>
-      <p>${wherePill(w)}${f.remarks ? ' · ' + esc(f.remarks) : ''}</p></div>
+      <p>${wherePill(w)}${f.remarks ? ' · ' + esc(f.remarks) : ''}</p>${f.softCopy ? `<p><small>Soft copies: ${softHtml(f.softCopy, false)}</small></p>` : ''}</div>
       <div class="btn-row"><button class="btn" id="fd-label" type="button">Print Label</button><button class="btn" id="fd-index" type="button">Print Index</button>
-        <button class="btn${w.place ? '' : ' primary'}" id="fd-move" type="button">${w.place ? 'Move…' : 'Set Location…'}</button><button class="btn" id="fd-edit" type="button">Edit</button></div></div>
+        <button class="btn" id="fd-soft" type="button">Soft Copy…</button><button class="btn${w.place ? '' : ' primary'}" id="fd-move" type="button">${w.place ? 'Move…' : 'Set Location…'}</button><button class="btn" id="fd-edit" type="button">Edit</button></div></div>
     <section class="panel"><div class="panel-head"><h2>Add Files</h2></div>
       <div style="padding:14px 22px 6px"><label class="legend" for="fd-q">Type a tracking number, office, report or month (e.g. “opac brs 2026”)</label>
         <input class="input" id="fd-q" style="max-width:620px;width:100%" autocomplete="off"><div id="fd-res" class="fd-res"></div>
         <div class="btn-row" style="margin-top:8px"><button class="btn primary sm" id="fd-add" type="button" disabled>Add Files</button>
           ${sugg.length ? `<small>Suggested: ${sugg.length} file${sugg.length > 1 ? 's' : ''} of the same office and report not yet filed · <a href="#" id="fd-sugg">add ${sugg.length > 1 ? 'all' : 'it'}</a></small>` : ''}</div></div></section>
     <section class="panel"><div class="panel-head"><h2>Files in this Folder · ${files.length}</h2></div>
-      ${files.length ? `<div class="t-head" style="${cols}"><span>Tracking No.</span><span>Office · Item</span><span>Received</span><span>Filed</span><span></span></div>
+      ${files.length ? `<div class="t-head" style="${cols}"><span>Tracking No.</span><span>Office · Item</span><span>Received</span><span>Soft copy</span><span>Filed</span><span></span></div>
         ${files.map((i) => { const d = describe(rms, offs, i); return `<div class="t-row" style="${cols}"><span class="mono">${esc(numberOf(i))}</span><span>${esc(d.office)}<br><small>${esc(d.what)}</small></span>
-          <span><small>${esc(fmtDate(i.receivedAt))}</small></span><span><small>${esc(fmtDate(i.filedAt))}${i.filedByName ? ' · ' + esc(shortName(i.filedByName)) : ''}</small></span>
-          <span class="acts"><button class="btn sm" data-fmove="${i.id}">Move to…</button><button class="btn sm" data-fout="${i.id}">Remove</button></span></div>`; }).join('')}`
+          <span><small>${esc(fmtDate(i.receivedAt))}</small></span><span><small>${i.softCopy ? softHtml(i.softCopy) : f.softCopy ? '<i>folder’s</i>' : '—'}</small></span>
+          <span><small>${esc(fmtDate(i.filedAt))}${i.filedByName ? ' · ' + esc(shortName(i.filedByName)) : ''}</small></span>
+          <span class="acts"><button class="btn sm" data-fsoft="${i.id}">Soft copy</button><button class="btn sm" data-fmove="${i.id}">Move to…</button><button class="btn sm" data-fout="${i.id}">Remove</button></span></div>`; }).join('')}`
         : '<div class="empty"><b>No files yet</b>Add them with the search above.</div>'}
       <div class="note">A file is in one folder only. “Move to…” puts it in another folder; “Remove” makes it Not Yet Filed again.</div></section>
     <section class="panel"><div class="panel-head"><h2>Movement History</h2></div>
@@ -166,6 +180,12 @@ function wireFolder(refs, rms, q) {
     await fileInto(refs, rms, list, f.id); toast(`${list.length} file${list.length > 1 ? 's' : ''} added to ${f.code}.`, 'ok'); };
   $$('[data-fout]').forEach((b) => { b.onclick = async () => { const i = rms.items.find((x) => x.id === b.dataset.fout); await fileInto(refs, rms, [i], ''); toast(`${numberOf(i)} is Not Yet Filed again.`, 'ok'); }; });
   $$('[data-fmove]').forEach((b) => { b.onclick = () => fileTo(refs, rms, [rms.items.find((x) => x.id === b.dataset.fmove)], f.teamId, f.id); });
+  $('#fd-soft').onclick = async () => { const v = await editSoft(refs, f.code, f.softCopy, 'Every file in this folder uses this, unless the file has its own.'); if (v === null) return;
+    await saveStore(refs, f.id, { ...strip(f), softCopy: v }); toast('Soft copy location saved.', 'ok'); };
+  $$('[data-fsoft]').forEach((b) => { b.onclick = async () => { const i = rms.items.find((x) => x.id === b.dataset.fsoft);
+    const v = await editSoft(refs, numberOf(i), i.softCopy, 'Only for this file (e.g. its own PDF). Leave empty to use the folder’s.'); if (v === null) return;
+    for (const x of (i.batchId ? batchOf(rms, i) : [i])) await saveItem(x.id, { ...strip(x), softCopy: v }, by(refs));
+    toast('Soft copy location saved.', 'ok'); }; });
   $('#fd-label').onclick = () => printLabel(rms, f, refs);
   $('#fd-index').onclick = () => printIndex(refs, rms, f);
   $('#fd-move').onclick = () => moveFolders(refs, rms, refs.teams.find((t) => t.id === f.teamId), [f.id]);
@@ -471,4 +491,113 @@ function printSack(rms, p, refs) {
     <h1>Contents of Sack <span class="mono">${esc(p.code)}</span></h1><p class="sub">${esc(r?.name || '')} · printed ${esc(fmtDate(new Date()))}</p>
     <table><thead><tr><th>#</th><th>Folder Code</th><th>Files</th><th>Tracking numbers</th></tr></thead><tbody>${fs.map((f, k) => { const files = filesIn(rms, f.id);
       return `<tr><td>${k + 1}</td><td class="mono">${esc(f.code)}</td><td>${files.length}</td><td class="mono" style="font-size:8.5pt">${esc(files.map((i) => numberOf(i)).join(', '))}</td></tr>`; }).join('')}</tbody></table>`);
+}
+
+/* ================= Records Logbook (one per document) ================= */
+// Columns: # · Folder · Date Received · Tracking Number · Particulars · Location (Soft Copy | Hard Copy) · Remarks,
+// grouped by folder (files not yet filed last). Print, or download as PDF, Excel or Word; Excel can hold every document.
+const docKeyOf = (i) => (i.kind === 'comm' ? 'comm' : i.kind === 'other' ? 'other:' + i.reportCode : i.reportId ? 'rep:' + i.reportId : '');
+function docList(refs, rms, teamId) {
+  const files = teamFiles(refs, rms, teamId), have = new Set(files.map(docKeyOf));
+  const reps = rms.reports.filter((r) => have.has('rep:' + r.id) || r.active !== false).sort((a, b) => a.code.localeCompare(b.code)).map((r) => ({ key: 'rep:' + r.id, code: r.code, name: r.name, group: 'Reports' }));
+  const others = (rms.otherTypes || []).map((t) => ({ key: 'other:' + t.code, code: t.code, name: t.name, group: 'Other submissions' }));
+  return [...reps, ...others, { key: 'comm', code: 'COMM', name: 'Communications', group: 'Communications' }];
+}
+const localDay = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
+function logRows(refs, rms, teamId, f) {
+  const offs = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id));
+  const rows = teamFiles(refs, rms, teamId).filter((i) => docKeyOf(i) === f.doc && (!f.office || i.officeId === f.office)
+    && (!f.from || localDay(i.receivedAt) >= f.from) && (!f.to || localDay(i.receivedAt) <= f.to) && (f.include !== 'filed' || i.folderId)
+    && (!f.folder || i.folderId === f.folder) && (!f.room || whereOf(rms, rms.folders.find((x) => x.id === i.folderId) || {}).room?.id === f.room));
+  const groups = new Map();
+  rows.sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)) || String(a.trackingNo).localeCompare(String(b.trackingNo))).forEach((i) => { const k = i.folderId || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(i); });
+  const keys = [...groups.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : (rms.folders.find((x) => x.id === a)?.code || '').localeCompare(rms.folders.find((x) => x.id === b)?.code || '', undefined, { numeric: true })));
+  return { offs, count: rows.length, groups: keys.map((k) => ({ folder: rms.folders.find((x) => x.id === k) || null, files: groups.get(k) })) };
+}
+function particulars(rms, offs, i) {
+  const d = describe(rms, offs, i);
+  const miss = isRepItem(i) ? (i.checklist || []).filter((c) => !(c.ok || c.na || c.optional)).length : 0;
+  return { office: d.office, more: d.what + (i.pages ? ' · ' + i.pages : '') + (miss ? ` · ${miss} document${miss > 1 ? 's' : ''} missing` : '') };
+}
+function logTableHtml(rms, data) {
+  let n = 0;
+  return `<table class="lbt"><thead><tr><th rowspan="2">#</th><th rowspan="2">Folder</th><th rowspan="2">Date Received</th><th rowspan="2">Tracking Number</th><th rowspan="2">Particulars</th><th colspan="2">Location</th><th rowspan="2">Remarks</th></tr>
+    <tr><th>Soft Copy</th><th>Hard Copy</th></tr></thead><tbody>${data.groups.map((g) => {
+      const w = g.folder ? whereOf(rms, g.folder) : null;
+      return `<tr class="grp"><td colspan="8">${g.folder ? `Folder ${esc(g.folder.code)} · ${esc(w.text)} · ${g.files.length} record${g.files.length === 1 ? '' : 's'}${g.folder.softCopy ? ' · soft copies: ' + esc(g.folder.softCopy) : ''}` : `Not yet filed · ${g.files.length} record${g.files.length === 1 ? '' : 's'}`}</td></tr>`
+        + g.files.map((i) => { const p = particulars(rms, data.offs, i), soft = softOf(rms, i);
+          return `<tr><td class="ctr">${++n}</td><td class="mono">${esc(g.folder ? g.folder.code : '—')}</td><td>${esc(fmtDate(i.receivedAt))}</td><td class="mono">${esc(numberOf(i))}</td>
+            <td>${esc(p.office)}<br><span class="muted">${esc(p.more)}</span></td><td>${soft ? (/^https?:\/\//i.test(soft) ? `<a href="${esc(soft)}" target="_blank" rel="noopener">${esc(soft)}</a>` : esc(soft)) : '—'}</td>
+            <td>${g.folder ? esc(w.place ? [w.room?.name, placeName(w.place)].filter(Boolean).join(' › ') : 'not placed yet') : '—'}</td><td>${esc(i.remarks || '')}</td></tr>`; }).join(''); }).join('')
+      || '<tr><td colspan="8" class="ctr muted">No records for this filter.</td></tr>'}</tbody></table>`;
+}
+function signers(refs, team) {
+  const u = (id) => refs.users.find((x) => x.id === id)?.data.name || '';
+  return [{ role: 'Prepared by', name: myName(refs) }, { role: 'Checked by (ATL)', name: u(team.data.atlUserId) }, { role: 'Noted by (Supervising Auditor)', name: u(team.data.saUserId) }];
+}
+const filtOf = (q) => ({ doc: q.get('d') || '', room: q.get('r') || '', folder: q.get('f') || '', office: q.get('o') || '', from: q.get('from') || '', to: q.get('to') || '', include: q.get('i') || 'all' });
+function rangeText(f) { const fd = (d) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  return f.from && f.to ? `received ${fd(f.from)} – ${fd(f.to)}` : f.from ? `received from ${fd(f.from)}` : f.to ? `received until ${fd(f.to)}` : 'all dates'; }
+
+export function logbookHtml(refs, rms, q) {
+  const team = teamOf(q, refs);
+  if (!team) return `<div class="msg bad">No team is assigned to you yet.</div>`;
+  const docs = docList(refs, rms, team.id), f = filtOf(q);
+  if (!docs.some((d) => d.key === f.doc)) f.doc = docs[0]?.key || 'comm';
+  const doc = docs.find((d) => d.key === f.doc), data = logRows(refs, rms, team.id, f);
+  const offs = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).filter((o) => o.teamId === team.id);
+  const rooms = roomsOf(rms, team.id), folders = foldersOfTeam(rms, team.id);
+  const opt = (v, t, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(t)}</option>`;
+  const grouped = ['Reports', 'Other submissions', 'Communications'].map((g) => { const l = docs.filter((d) => d.group === g); return l.length ? `<optgroup label="${g}">${l.map((d) => opt(d.key, d.code === 'COMM' ? d.name : `${d.code} · ${d.name}`, f.doc)).join('')}</optgroup>` : ''; }).join('');
+  const sg = signers(refs, team);
+  return `<div class="hello"><div><h1>Records Logbook · ${esc(team.data.name)}</h1><p>One logbook per document: every record, folder by folder, with where its soft copy and hard copy are kept.</p></div>
+      <div class="btn-row">${teamSel(refs, team, 'logbook')}<button class="btn" id="lb-print" type="button">Print</button><div class="dl-wrap"><button class="btn primary" id="lb-dl" type="button">Download ▾</button>
+        <div class="dl-menu" id="lb-dl-menu" hidden><button type="button" data-ldl="pdf">PDF</button><button type="button" data-ldl="xlsx">Excel</button><button type="button" data-ldl="docx">Word</button><button type="button" data-ldl="all">Excel · all documents</button></div></div></div></div>
+    <section class="panel">
+      <div class="mon-filters">
+        <label>Document<select class="input" data-lf="d">${grouped}</select></label>
+        <label>Room<select class="input" data-lf="r">${opt('', 'All rooms', f.room)}${rooms.map((r) => opt(r.id, r.name, f.room)).join('')}</select></label>
+        <label>Folder<select class="input" data-lf="f">${opt('', 'All folders', f.folder)}${folders.map((x) => opt(x.id, x.code, f.folder)).join('')}</select></label>
+        <label>Office<select class="input" data-lf="o">${opt('', 'All offices', f.office)}${offs.map((o) => opt(o.id, o.label, f.office)).join('')}</select></label>
+        <label>Received from<input class="input" type="date" data-lf="from" value="${esc(f.from)}"></label>
+        <label>to<input class="input" type="date" data-lf="to" value="${esc(f.to)}"></label>
+        <label>Include<select class="input" data-lf="i">${opt('all', 'Filed and not yet filed', f.include)}${opt('filed', 'Filed only', f.include)}</select></label>
+      </div>
+      <div class="lbsheet" id="lb-sheet">
+        <div class="lb-top"><img src="img/coa-logo.png" alt=""><div><div class="t1">COMMISSION ON AUDIT</div><div class="t2">${esc(team.data.officeCode ? 'Audit Team ' + team.data.officeCode : team.data.name)} · Province of Quirino</div></div></div>
+        <div class="lb-title">RECORDS LOGBOOK · ${esc(doc.code === 'COMM' ? 'COMMUNICATIONS' : doc.code)}</div>
+        <div class="lb-sub">${esc(doc.name)} · ${esc(f.folder ? 'Folder ' + (folders.find((x) => x.id === f.folder)?.code || '') : f.room ? rooms.find((r) => r.id === f.room)?.name || '' : 'All folders')} · ${esc(rangeText(f))} · ${data.count} record${data.count === 1 ? '' : 's'}</div>
+        ${logTableHtml(rms, data)}
+        <div class="lb-sig">${sg.map((x) => `<div><b>${esc(x.name || ' ')}</b><span>${esc(x.role)}</span></div>`).join('')}</div>
+        <div class="lb-foot"><span>AMS · Records Logbook · ${esc(team.data.name)}</span><span>Printed ${esc(fmtDate(new Date()))}</span></div>
+      </div></section>`;
+}
+export function wireLogbook(refs, rms, q) {
+  const team = teamOf(q, refs); if (!team) return;
+  wireTeamSel();
+  $$('[data-lf]').forEach((el) => { el.onchange = () => { const p = new URLSearchParams(location.hash.split('?')[1] || ''); p.set('t', team.id); if (el.value) p.set(el.dataset.lf, el.value); else p.delete(el.dataset.lf);
+    if (el.dataset.lf === 'r') p.delete('f'); location.hash = '#/rms/logbook?' + p.toString(); }; });
+  const docs = docList(refs, rms, team.id), f = filtOf(q); if (!docs.some((d) => d.key === f.doc)) f.doc = docs[0]?.key || 'comm';
+  $('#lb-print').onclick = () => { const sheet = $('#lb-sheet').outerHTML.replace('src="img/coa-logo.png"', `src="${new URL('img/coa-logo.png', location.href).href}"`);
+    const css = [...document.styleSheets].map((ss) => { try { return [...ss.cssRules].map((r) => r.cssText).filter((t) => t.includes('lb')).join('\n'); } catch (e) { return ''; } }).join('\n');
+    const w = window.open('', '_blank'); if (!w) return toast('Allow pop-ups for this site to print.', 'bad');
+    w.document.open(); w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Records Logbook</title><style>body{font-family:Arial,Helvetica,sans-serif;margin:0} @page{size:legal landscape;margin:0.4in} ${css} .lbsheet{margin:0;box-shadow:none;border:0}</style></head><body>${sheet}<script>window.onload=()=>{window.focus();window.print();}<\/script></body></html>`); w.document.close(); };
+  const menu = $('#lb-dl-menu');
+  $('#lb-dl').onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+  if (!window.__lbDlClose) { window.__lbDlClose = true; document.addEventListener('click', () => { const m = document.getElementById('lb-dl-menu'); if (m) m.hidden = true; }); }
+  const infoFor = (doc, data) => ({ title: `RECORDS LOGBOOK · ${doc.code === 'COMM' ? 'COMMUNICATIONS' : doc.code} (${doc.name})`, filters: `${team.data.name} · ${f.folder ? 'Folder ' + (rms.folders.find((x) => x.id === f.folder)?.code || '') : f.room ? rms.rooms.find((r) => r.id === f.room)?.name || '' : 'All folders'} · ${rangeText(f)}`,
+    counts: `${data.count} record${data.count === 1 ? '' : 's'}`, notes: [], legend: null, sign: signers(refs, team), navy: true, sheet: doc.code === 'COMM' ? 'Communications' : doc.code,
+    widths: [4, 14, 11, 21, 34, 20, 18, 12], align: ['c', 'l', 'l', 'l', 'l', 'l', 'l', 'l'], fileBase: `Records Logbook ${doc.code} ${team.data.name}`,
+    made: 'Printed ' + new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) });
+  const tableOf = (data) => { const t = document.createElement('template'); t.innerHTML = logTableHtml(rms, data).trim(); return t.content.firstElementChild; };
+  $$('[data-ldl]', menu).forEach((b) => { b.onclick = async () => {
+    menu.hidden = true; toast('Preparing the file…');
+    try {
+      if (b.dataset.ldl === 'all') {
+        const sheets = docs.map((d) => { const data = logRows(refs, rms, team.id, { ...f, doc: d.key }); return data.count ? { table: tableOf(data), info: infoFor(d, data) } : null; }).filter(Boolean);
+        if (!sheets.length) return toast('No records for this filter.', 'bad');
+        await toExcelBook(sheets, { fileBase: `Records Logbook all documents ${team.data.name}` });
+      } else { const doc = docs.find((d) => d.key === f.doc), data = logRows(refs, rms, team.id, f); await downloadTable(b.dataset.ldl, $('#lb-sheet table'), infoFor(doc, data)); }
+      toast('File downloaded.', 'ok');
+    } catch (err) { toast('Could not make the file: ' + err.message, 'bad'); } }; });
 }

@@ -16,6 +16,8 @@ const myName = (refs) => refs.me?.data.name || '';
 // A document counts as in when submitted, or marked N/A (optional parts only, e.g. BRS parts that do not apply).
 // Optional parts (e.g. Schedule of Reconciling Items) never count as missing: ticked = attached, not ticked = none.
 // (N/A marks on records saved before 20 Oct 2026 also count as in.)
+// A received report (not a communication or another kind of submission).
+export const isRepItem = (i) => !!i && !!i.reportId && i.kind !== 'comm' && i.kind !== 'other';
 export const isIn = (c) => !!(c.ok || c.na || c.optional);
 const present = (c) => !!(c.ok || c.na);
 // Optional parts attached for an account in this transmittal (shown as "+ …").
@@ -53,7 +55,7 @@ export function applyBatch(i, picked, pickedNa, at, who, whoName) {
 // transmittals: an account or document counts as in once any transmittal brought it (or it was marked N/A).
 // Linked documents (e.g. the Trial Balance in the quarterly report counts for that month's Trial Balance) come in as
 // "virtual" transmittals: built from the other report's records, never saved.
-export const periodRecs = (rms, officeId, reportId, period) => [...rms.items.filter((i) => i.kind !== 'comm' && i.officeId === officeId && i.reportId === reportId && i.period === period && i.status !== 'rejected'),
+export const periodRecs = (rms, officeId, reportId, period) => [...rms.items.filter((i) => isRepItem(i) && i.officeId === officeId && i.reportId === reportId && i.period === period && i.status !== 'rejected'),
   ...linkedRecs(rms, officeId, reportId, period)].sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)));
 
 /* ---------- linked documents between reports (Report Library: "Same document as") ---------- */
@@ -85,7 +87,7 @@ function linkedRecs(rms, officeId, reportId, period) {
   const end = endOf(period), out = [];
   [...new Set(pairs.map((x) => x.sid))].forEach((sid) => {
     const S = rms.reports.find((x) => x.id === sid), mine = pairs.filter((x) => x.sid === sid);
-    rms.items.filter((i) => i.kind !== 'comm' && i.officeId === officeId && i.reportId === sid && i.status !== 'rejected' && i.period && endOf(i.period) === end).forEach((src) => {
+    rms.items.filter((i) => isRepItem(i) && i.officeId === officeId && i.reportId === sid && i.status !== 'rejected' && i.period && endOf(i.period) === end).forEach((src) => {
       const sk = (src.checklist || []).map((c) => ({ c, k: entryKey(S, c) }));
       let any = false;
       const checklist = ents.map((e) => {
@@ -147,7 +149,7 @@ export function transmittalHtml(i, agg, { total = true } = {}) {
 }
 
 // The record already received for an office, report and period (not rejected), if any.
-export const existingFor = (rms, officeId, reportId, period) => rms.items.filter((i) => i.kind !== 'comm' && i.officeId === officeId && i.reportId === reportId && i.period === period && i.status !== 'rejected')
+export const existingFor = (rms, officeId, reportId, period) => rms.items.filter((i) => isRepItem(i) && i.officeId === officeId && i.reportId === reportId && i.period === period && i.status !== 'rejected')
   .sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)))[0] || null;
 const missing = (i) => (i.checklist || []).filter((c) => !isIn(c));
 
@@ -160,13 +162,13 @@ export const canCombine = (refs) => hasRole(refs, 'admin');
 const dupKey = (i) => `${i.officeId}|${i.reportId}|${i.period}`;
 export function duplicateGroups(rms, offIds) {
   const g = {};
-  rms.items.filter((i) => i.kind !== 'comm' && i.status !== 'rejected' && offIds.has(i.officeId) && !i._new).forEach((i) => { (g[dupKey(i)] = g[dupKey(i)] || []).push(i); });
+  rms.items.filter((i) => isRepItem(i) && i.status !== 'rejected' && offIds.has(i.officeId) && !i._new).forEach((i) => { (g[dupKey(i)] = g[dupKey(i)] || []).push(i); });
   return Object.entries(g).filter(([, l]) => l.length > 1).map(([key, l]) => ({ key, list: l.sort((a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt))) }));
 }
 // Status helpers. Older records may still say 'pending' (= For Verification) or 'complete' (= accepted).
-export const isVerify = (i) => i.kind !== 'comm' && (i.status === 'verify' || i.status === 'pending');
+export const isVerify = (i) => isRepItem(i) && (i.status === 'verify' || i.status === 'pending');
 export const isAccepted = (i) => i.status === 'accepted' || i.status === 'complete';
-export const lacksDocs = (i) => i.kind !== 'comm' && i.status !== 'rejected' && missing(i).length > 0;
+export const lacksDocs = (i) => isRepItem(i) && i.status !== 'rejected' && missing(i).length > 0;
 
 /* ---------- numbers ---------- */
 // One running series per office, per report and per year: PGQ-OPAC-FS-2026-0001, PGQ-OPAC-BRS-2026-0001 (since 21 Oct 2026;
@@ -190,6 +192,7 @@ export function expectedPrefix(rms, i) {
   if (!i || !i.trackingNo || ['out', 'psao-in', 'psao-out'].includes(i.kind)) return null;
   const off = (rms.offices || []).find((o) => o.id === i.officeId);
   if (i.kind === 'comm') { const oc = i.officeId ? (off?.code || i.officeCode) : 'OUT'; return oc && i.trackingYear ? `${oc}-${i.trackingYear}-` : null; }
+  if (i.kind === 'other') { const oc = off?.code || i.officeCode; return oc && i.reportCode && i.trackingYear ? `${oc}-${i.reportCode}-${i.trackingYear}-` : null; }
   const rc = rms.reports.find((r) => r.id === i.reportId)?.code || i.reportCode, oc = off?.code || i.officeCode;
   const ps = (i.batchPeriods && i.batchPeriods.length ? i.batchPeriods : [i.period]).filter(Boolean);
   const y = ps.length ? Math.min(...ps.map((p) => +String(p).slice(0, 4))) : +i.trackingYear;
@@ -233,7 +236,7 @@ export function periodsText(list) {
 }
 
 export function statusText(i) {
-  if (i.kind === 'comm' || i.kind === 'psao-in') return 'Received';
+  if (i.kind === 'comm' || i.kind === 'psao-in' || i.kind === 'other') return 'Received';
   if (isVerify(i)) return 'For Verification';
   if (i.status === 'rejected') return 'Rejected';
   if (isAccepted(i)) return 'Accepted';
@@ -338,7 +341,7 @@ const ordinal = (n) => ORD[n - 1] || n + 'th';
 export function historyOf(i) {
   const ck = i.checklist || [], total = ck.length;
   const ev = [];
-  if (i.kind === 'comm') { const n = laterNote(i.receivedAt, i.encodedAt, i.receivedByName); return [{ at: i.receivedAt, text: 'Received' + (n ? ' (' + n + ')' : ''), who: n ? '' : i.receivedByName }]; }
+  if (i.kind === 'comm' || i.kind === 'other') { const n = laterNote(i.receivedAt, i.encodedAt, i.receivedByName); return [{ at: i.receivedAt, text: 'Received' + (n ? ' (' + n + ')' : ''), who: n ? '' : i.receivedByName }]; }
   let have = ck.filter((c) => c.ok && !c.late).length;
   // Per account (e.g. BRS): after each submission, how many accounts are complete.
   const grp = isGrouped(ck), lbl = ((i.lineLabel || 'account') + 's').toLowerCase(), inSoFar = new Set(ck.map((c, k) => ((c.ok && !c.late) || c.na ? k : -1)).filter((k) => k >= 0));
@@ -370,7 +373,7 @@ export function historyHtml(i) {
 
 /* ================= Receiving page ================= */
 // The report group of an item (from the Report Library), or 'comm' for communications.
-export const groupOfItem = (rms, i) => i.kind === 'comm' ? 'comm' : (rms.reports.find((r) => r.id === i.reportId)?.groupId || '');
+export const groupOfItem = (rms, i) => i.kind === 'comm' ? 'comm' : i.kind === 'other' ? 'other' : (rms.reports.find((r) => r.id === i.reportId)?.groupId || '');
 export function receivingHtml(refs, rms, q) {
   const scopes = scopesFor(refs);
   if (!scopes.length) return `<div class="msg bad">No team is assigned to you yet. Ask the Admin to set your team in Users &amp; Roles.</div>`;
@@ -388,7 +391,7 @@ export function receivingHtml(refs, rms, q) {
     .filter((i, k, all) => !i.batchId || all.findIndex((x) => x.batchId === i.batchId) === k) : [];
   // Periods still incomplete over all their transmittals (one row per office, report and period).
   const seen = new Set(), lacking = [];
-  rms.items.filter((i) => i.kind !== 'comm' && offIds.has(i.officeId) && i.status !== 'rejected' && inGroup(i)).forEach((i) => {
+  rms.items.filter((i) => isRepItem(i) && offIds.has(i.officeId) && i.status !== 'rejected' && inGroup(i)).forEach((i) => {
     const k = `${i.officeId}|${i.reportId}|${i.period}`; if (seen.has(k)) return; seen.add(k);
     const agg = periodOf(rms, i); if (!agg.done) lacking.push({ k, i: agg.recs[agg.recs.length - 1], agg });
   });
@@ -399,7 +402,7 @@ export function receivingHtml(refs, rms, q) {
     return `${(i.checklist || []).filter((c) => c.ok).length} document(s) in this transmittal`; };
   const off = (id) => offs.find((o) => o.id === id);
   const rep = (id) => rms.reports.find((r) => r.id === id);
-  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
+  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : i.kind === 'other' ? esc((i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '')) : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
   const cols = 'grid-template-columns:minmax(190px,1.2fr) minmax(170px,1fr) 120px 220px 170px';
   const row = (i, acts) => `<div class="t-row" style="${cols}"><span class="mono"><b>${esc(numberOf(i))}</b>${i._new ? '<br><small class="warn-t">not yet confirmed</small>' : ''}</span>
     <span>${esc(i.kind === 'comm' && !i.officeId ? i.fromOutside : off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span>
@@ -408,7 +411,7 @@ export function receivingHtml(refs, rms, q) {
   const gOpt = (v, t) => `<option value="${esc(v)}" ${g === v ? 'selected' : ''}>${esc(t)}</option>`;
   return `<div class="hello"><div><h1>Incoming</h1><p>Record what comes in from the offices and from outside. Every receipt gets its tracking number right away. Reports received by the JO are For Verification until an auditor accepts or rejects them.</p></div>
       <button class="btn primary" type="button" id="rcv-new">+ Receive Documents</button></div>
-    <div class="rcv-filter"><label for="rcv-g">Group</label><select class="input" id="rcv-g">${gOpt('all', 'All groups')}${groups.map((x) => gOpt(x.id, x.name)).join('')}${gOpt('none', 'No group')}${gOpt('comm', 'Communications')}</select></div>
+    <div class="rcv-filter"><label for="rcv-g">Group</label><select class="input" id="rcv-g">${gOpt('all', 'All groups')}${groups.map((x) => gOpt(x.id, x.name)).join('')}${gOpt('none', 'No group')}${gOpt('comm', 'Communications')}${gOpt('other', 'Other submissions')}</select></div>
     ${verify.length ? `<section class="panel"><div class="panel-head"><h2>For Verification · ${verify.length}</h2></div>
       <div class="t-head" style="${cols}"><span>Tracking No.</span><span>Office · Report</span><span>Received</span><span>Documents</span><span></span></div>
       ${verify.map((i) => { const m = missing(i), n = (i.checklist || []).length; return `<div class="t-row" style="${cols}"><span class="mono"><b>${esc(numberOf(i))}</b></span><span>${esc(off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span>
@@ -467,7 +470,7 @@ async function receiveForm(refs, rms, preset = null) {
     body: `<div class="rcv-pdf"><label class="btn sm" for="f-pdf">Upload PDF to fill in</label><input type="file" id="f-pdf" accept="application/pdf,.pdf" hidden>
         <span class="hint" id="f-pdf-hint">Reads the office, report and period, or a letter's subject, sender and signatory. The PDF itself is not saved.</span>
         <button type="button" class="btn sm primary" id="f-ocr" hidden>Read scanned pages</button></div>
-      <div class="rcv-type" ${atPsao ? 'hidden' : ''}><label><input type="radio" name="kind" value="report" checked> Report Submission</label><label><input type="radio" name="kind" value="comm"> Communication</label></div>
+      <div class="rcv-type" ${atPsao ? 'hidden' : ''}><label><input type="radio" name="kind" value="report" checked> Report Submission</label><label><input type="radio" name="kind" value="comm"> Communication</label><label><input type="radio" name="kind" value="other"> Other Submission</label></div>
       <div class="two"><div class="field"><label for="f-mun">Municipality</label><select class="input" id="f-mun">${scopes.map((s) => `<option value="${s.id}">${esc(label(s))}</option>`).join('')}</select></div>
         <div class="field"><label for="f-off">Submitting Office</label><select class="input" id="f-off"></select><span class="hint" id="f-off-hint"></span></div></div>
       <div id="rep-part">
@@ -480,6 +483,14 @@ async function receiveForm(refs, rms, preset = null) {
           <div class="rcv-type"><label><input type="radio" name="rdec" value="verify" checked> For Verification</label><label><input type="radio" name="rdec" value="accept"> Accept</label><label><input type="radio" name="rdec" value="reject"> Reject</label></div>
           <div class="field" id="f-drem-box" hidden><label for="f-drem">Decision remarks <span id="f-dreq">(required for a rejection)</span></label><input class="input" id="f-drem" placeholder="e.g. Accepted; DVs to follow within 5 days"></div>` : ''}
           <span class="hint" id="f-dec-hint"></span></div>
+      </div>
+      <div id="other-part" hidden>
+        <div class="two"><div class="field"><label for="f-otype">Document type</label><select class="input" id="f-otype">${(rms.otherTypes || []).map((t) => `<option value="${esc(t.code)}">${esc(t.name)} (${esc(t.code)})</option>`).join('')}</select>
+            <span class="hint" id="f-ono"></span></div>
+          <div class="field"><label for="f-otitle">Title / description</label><input class="input" id="f-otitle" placeholder="e.g. MOA between PGQ and DPWH on the farm-to-market road"></div></div>
+        <div class="two"><div class="field"><label for="f-odoc">Document no. (optional)</label><input class="input" id="f-odoc" placeholder="e.g. MOA No. 12, s. 2026"></div>
+          <div class="field"><label for="f-odate">Document date (optional)</label><input class="input" type="date" id="f-odate"></div></div>
+        <div class="field" style="max-width:220px"><label for="f-opages">Pages / Attachments (optional)</label><input class="input" id="f-opages" placeholder="e.g. 6 pages"></div>
       </div>
       <div id="comm-part" hidden>
 
@@ -672,7 +683,11 @@ async function receiveForm(refs, rms, preset = null) {
           const cur = $('#f-per', bg).value; $$('input[name=pers]', bg).forEach((y) => { if (y.value === cur) y.checked = true; }); }
         multi = want; perMonth = false; $('#f-per', bg).hidden = multi; $('#f-pers', bg).hidden = !multi; drawTabs(); fillList(); dueHint(); }; });
       bg._multi = () => ({ multi, perMonth, picked: picked(), capture, common, perState, show: (p) => { curTab = p; drawTabs(); fillList(); } });
-      const kindState = () => { const k = kind(); $('#rep-part', bg).hidden = k !== 'report'; $('#comm-part', bg).hidden = k !== 'comm'; };
+      const kindState = () => { const k = kind(); $('#rep-part', bg).hidden = k !== 'report'; $('#comm-part', bg).hidden = k !== 'comm'; $('#other-part', bg).hidden = k !== 'other'; otherNo(); };
+      // Other Submission: the next number of the chosen type for this office (series per office, type and year).
+      const otherNo = () => { if (kind() !== 'other') return; const o = office(), code = $('#f-otype', bg).value, y = new Date($('#f-date', bg).value || now).getFullYear();
+        $('#f-ono', bg).textContent = o && o.code && code ? `Number: ${o.code}-${code}-${y}-…` : ''; };
+      $('#f-otype', bg).onchange = otherNo;
       $$('input[name=kind]', bg).forEach((x) => { x.onchange = kindState; });
       $('#f-outside', bg).onchange = () => { const o = $('#f-outside', bg).checked; $('#f-outside-box', bg).hidden = !o; $('#f-mun', bg).disabled = o; $('#f-off', bg).disabled = o; };
       // Open on the municipality used last, or else the first one with offices ready to receive.
@@ -680,7 +695,7 @@ async function receiveForm(refs, rms, preset = null) {
       const ready = scopes.find((s) => s.id === last) || scopes.find((s) => offs.some((o) => o.munId === s.id && o.code));
       if (ready) $('#f-mun', bg).value = ready.id;
       $('#f-mun', bg).onchange = () => { try { localStorage.setItem('rms-last-mun', $('#f-mun', bg).value); } catch (e) { /* ignore */ } fillOffices(); };
-      $('#f-off', bg).onchange = fillReports; $('#f-rep', bg).onchange = fillPeriods; $('#f-per', bg).onchange = fillList; $('#f-date', bg).onchange = dueHint;
+      $('#f-off', bg).onchange = () => { fillReports(); otherNo(); }; $('#f-rep', bg).onchange = fillPeriods; $('#f-per', bg).onchange = fillList; $('#f-date', bg).onchange = dueHint;
       // Picking a usual submitter fills in the designation right away (not on leaving the field).
       $('#f-by', bg).oninput = () => { const opt = [...$('#f-by-list', bg).options].find((x) => x.value === $('#f-by', bg).value); if (opt && !$('#f-des', bg).value) $('#f-des', bg).value = opt.textContent; };
       // Upload PDF to fill in (reports and communications). Scanned PDFs are read only when the receiver asks.
@@ -787,6 +802,14 @@ async function receiveForm(refs, rms, preset = null) {
         out = { ...base, reportId: r.id, reportCode: r.code, period, checklist, ...(isGrouped(checklist) ? { lineLabel: r.lineLabel || 'Line' } : {}), ...trackingNo(rms, o, r.code, yr), ...(allIn ? { completedAt: at } : {}),
           status: choice === 'accept' ? 'accepted' : choice === 'reject' ? 'rejected' : 'verify',
           ...(choice === 'verify' ? {} : { decision: { action: choice, remarks: dRem, by: by(refs), byName: myName(refs), at: encodedAt } }) };
+      } else if (kind === 'other') {
+        const t = (rms.otherTypes || []).find((x) => x.code === $('#f-otype', bg).value);
+        if (!t) { toast('Choose the document type (Report Library → Other Submission Types).', 'bad'); return false; }
+        const title = $('#f-otitle', bg).value.trim(); if (!title) { toast('Enter the title or a short description.', 'bad'); return false; }
+        const year = new Date(when.iso).getFullYear(), key = o.id + '|o:' + t.code, start = +((t.starts || {})[year] || 0);
+        const n = Math.max(start - 1, 0, ...rms.items.filter((i) => i.seriesKey === key && i.trackingYear === year).map((i) => i.series || 0)) + 1;
+        out = { ...base, kind: 'other', docType: t.code, docTypeName: t.name, reportCode: t.code, subject: title, docNo: $('#f-odoc', bg).value.trim(), docDate: $('#f-odate', bg).value,
+          pages: $('#f-opages', bg).value.trim(), status: 'received', trackingNo: `${o.code}-${t.code}-${year}-${String(n).padStart(4, '0')}`, series: n, trackingYear: year, seriesKey: key };
       } else {
         const subject = $('#f-subj', bg).value.trim();
         if (!subject) { toast('Enter the subject or a short description.', 'bad'); return false; }
@@ -956,7 +979,8 @@ export async function viewItem(refs, rms, id) {
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   const row = (k, v) => `<div class="kvrow"><small>${k}</small><span>${v}</span></div>`;
   modal({ title: numberOf(i), body: `${row('Status', statusPill(i))}${row('Office', esc(i.fromOutside || off?.label || ''))}
-    ${i.kind === 'comm' ? row('Subject', esc(i.subject)) + (i.pages ? row('Pages', esc(i.pages)) : '') : row('Report', esc(i.reportCode + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) + ' (' + batchOf(rms, i).length + ' periods, one tracking number)' : periodLabel(i.period))))}
+    ${i.kind === 'other' ? row('Document', esc((i.docTypeName || i.reportCode) + ' · ' + i.subject) + (i.docNo || i.docDate ? `<br><small>${esc([i.docNo, i.docDate && fmtDate(i.docDate)].filter(Boolean).join(' · '))}</small>` : '')) + (i.pages ? row('Pages', esc(i.pages)) : '')
+      : i.kind === 'comm' ? row('Subject', esc(i.subject)) + (i.pages ? row('Pages', esc(i.pages)) : '') : row('Report', esc(i.reportCode + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) + ' (' + batchOf(rms, i).length + ' periods, one tracking number)' : periodLabel(i.period))))}
     ${row('Received', esc(fmtDate(i.receivedAt) + ', ' + new Date(i.receivedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) + ' by ' + esc(i.receivedByName)
       + (encodedLater(i) ? `<br><small>Encoded later: ${esc(fmtDT(i.encodedAt))}</small>` : ''))}
     ${row('Received from', esc(i.submittedBy) + (i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''))}
@@ -1019,7 +1043,7 @@ async function correctItem(refs, rms, id) {
   if (!canCorrect(refs)) return toast('Only the Admin and the SA can correct a received record.', 'bad');
   const i = rms.items.find((x) => x.id === id);
   const r = rms.reports.find((x) => x.id === i.reportId);
-  const isRep = i.kind !== 'comm';
+  const isRep = isRepItem(i);
   const y = +String(i.period || i.receivedAt).slice(0, 4);
   const periods = isRep && r ? [...periodsOf(r, y - 1), ...periodsOf(r, y), ...periodsOf(r, y + 1)].filter((p) => { const [py, pa] = span(p); return new Date(py, pa - 1, 1) <= new Date(); }) : [];
   if (isRep && i.period && !periods.includes(i.period)) periods.push(i.period);
@@ -1217,7 +1241,7 @@ export function printSlip(refs, rms, i) {
   const rep = rms.reports.find((r) => r.id === i.reportId);
   const okList = (i.checklist || []).filter((c) => c.ok);
   // What the whole period still lacks, over all its transmittals (this one included even if not yet in the list).
-  const agg = i.kind === 'comm' ? null : periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i), aggMiss = agg ? agg.checklist.filter((c) => !isIn(c)) : [];
+  const agg = !isRepItem(i) ? null : periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i), aggMiss = agg ? agg.checklist.filter((c) => !isIn(c)) : [];
   const pend = !i.trackingNo, ver = isVerify(i);
   // One transmittal for more than one period: one slip, a section per period.
   const batch = i.kind === 'report' && i.batchId ? batchOf(rms, i) : [i];
@@ -1256,7 +1280,8 @@ export function printSlip(refs, rms, i) {
     <div class="title">ACKNOWLEDGMENT RECEIPT</div>
     <div class="no"><small>${pend ? 'PENDING CODE' : 'TRACKING NUMBER'}</small><b>${esc(numberOf(i))}</b></div>
     <div class="kv"><span>${i.fromOutside ? 'From' : 'Office'}</span><span><b>${esc(i.fromOutside || off?.label || '')}</b></span>
-      ${i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + (many ? periodsText(batch.map((x) => x.period)) + ' (' + batch.length + ' periods)' : periodLabel(i.period)))}</span>`}
+      ${i.kind === 'other' ? `<span>Document</span><span>${esc((i.docTypeName || i.reportCode) + ' · ' + i.subject)}${i.docNo ? ' · ' + esc(i.docNo) : ''}${i.pages ? ' · ' + esc(i.pages) : ''}</span>`
+        : i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + (many ? periodsText(batch.map((x) => x.period)) + ' (' + batch.length + ' periods)' : periodLabel(i.period)))}</span>`}
       <span>Received</span><span>${esc(new Date(i.receivedAt).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>
       <span>Received from</span><span>${esc(i.submittedBy)}${i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''}</span></div>
     ${i.kind === 'report' ? `${batch.map(partOf).join('')}

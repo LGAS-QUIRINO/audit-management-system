@@ -6,9 +6,9 @@ import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { download } from './export.js';
-import { foldersHtml, wireFolders, unfiledHtml, wireUnfiled, unfiledCount, locationHtml, wireLocation, storageHtml, wireStorage, locationOf } from './storage.js';
+import { foldersHtml, wireFolders, unfiledHtml, wireUnfiled, unfiledCount, locationHtml, wireLocation, storageHtml, wireStorage, locationOf, logbookHtml, wireLogbook } from './storage.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
-import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText, viewItem } from './receiving.js';
+import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText, viewItem, isRepItem } from './receiving.js';
 
 // Load this module's look once.
 if (!document.querySelector('link[data-rms]')) {
@@ -49,7 +49,7 @@ function canEditMun(refs, munTeamId, munId) {
 
 /* ---------- data ---------- */
 async function loadRms() {
-  const [reports, offices, items, settings, groups, psaoSet] = await Promise.all([store.list('rms_reports'), store.list('rms_offices'), store.list('rms_items'), store.get('rms_settings', 'office'), store.get('rms_settings', 'groups'), store.get('rms_settings', 'psao')]);
+  const [reports, offices, items, settings, groups, psaoSet, otherSet] = await Promise.all([store.list('rms_reports'), store.list('rms_offices'), store.list('rms_items'), store.get('rms_settings', 'office'), store.get('rms_settings', 'groups'), store.get('rms_settings', 'psao'), store.get('rms_settings', 'othertypes')]);
   const isPsao = (i) => i.data && (i.data.kind === 'psao-in' || i.data.kind === 'psao-out');
   // Records & Storage: rooms, cabinets/shelves/sacks and folders (kept in the same database list).
   const isStore = (i) => i.data && String(i.data.kind || '').startsWith('store-');
@@ -64,6 +64,8 @@ async function loadRms() {
     // The PSAO's own books (PSAO Incoming 'psao-in', PSAO Outgoing 'psao-out') and its document types.
     psao: items.filter(isPsao).map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
     psaoTypes: (psaoSet && psaoSet.data && psaoSet.data.types) || [],
+    // Other Submission types (MOA, Ordinance, Resolution…), set in the Report Library; starts: { '2026': 16 } = start 2026 at 0016.
+    otherTypes: (otherSet && otherSet.data && otherSet.data.types) || [{ code: 'MOA', name: 'Memorandum of Agreement' }, { code: 'ORD', name: 'Ordinance' }, { code: 'RES', name: 'Resolution' }],
     // Report groups made by the team (Report Library), in their set order.
     groups: (groups && groups.data && groups.data.list) || [],
     startPeriod: (settings && settings.data && settings.data.startPeriod) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
@@ -185,6 +187,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
     { key: 'folders', label: 'Folders', icon: 'folder', href: '#/rms/folders' },
     { key: 'unfiled', label: 'Not Yet Filed', icon: 'stack', href: '#/rms/unfiled', count: unfiledCount(refs, rms) },
     { key: 'location', label: 'Location', icon: 'pin', href: '#/rms/location' },
+    { key: 'logbook', label: 'Records Logbook', icon: 'book', href: '#/rms/logbook' },
     { key: 'storage', label: 'Storage Setup', icon: 'shelf', href: '#/rms/storage' }];
   if (psaoOnly(refs)) return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
@@ -220,12 +223,12 @@ export async function render(ctx) {
   let view = parts[0] || 'overview';
   if (view === 'setup') view = parts[1] === 'offices' ? 'offices' : 'library';
   if (view === 'incoming') view = 'receiving';
-  const STORE_VIEWS = ['folders', 'unfiled', 'location', 'storage'];
+  const STORE_VIEWS = ['folders', 'unfiled', 'location', 'storage', 'logbook'];
   if (jo && !['receiving', 'outgoing', ...STORE_VIEWS].includes(view)) view = 'receiving';
   if (['psao-in', 'psao-out'].includes(view) && !canPsao(refs)) view = 'overview';
   if (psaoOnly(refs) && ['receiving', 'outgoing', 'offices'].includes(view)) view = view === 'outgoing' ? 'psao-out' : view === 'offices' ? 'library' : 'psao-in';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
   const pendingN = (jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length) + waitingForMe(refs, rms).length;
   const body = view === 'receiving' ? receivingHtml(refs, rms, q).replace('id="rcv-new">+ Receive Documents</button></div>', (m) => m + fromPsaoHtml(refs, rms))
@@ -236,6 +239,7 @@ export async function render(ctx) {
     : view === 'unfiled' ? unfiledHtml(refs, rms, q)
     : view === 'location' ? locationHtml(refs, rms, q)
     : view === 'storage' ? storageHtml(refs, rms, q)
+    : view === 'logbook' ? logbookHtml(refs, rms, q)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
@@ -255,6 +259,7 @@ export async function render(ctx) {
   else if (view === 'unfiled') wireUnfiled(refs, rms, q);
   else if (view === 'location') wireLocation(refs, rms, q, (id) => viewItem(refs, rms, id));
   else if (view === 'storage') wireStorage(refs, rms, q);
+  else if (view === 'logbook') wireLogbook(refs, rms, q);
 }
 
 /* ================= Overview ================= */
@@ -272,7 +277,7 @@ function overviewHtml(refs, rms, overdue) {
   const verify = mine.filter(isVerify);
   // Periods still incomplete over all their transmittals (one per office, report and period).
   const seenP = new Set(), lacking = [];
-  mine.filter((i) => i.kind !== 'comm' && i.status !== 'rejected').forEach((i) => { const k = `${i.officeId}|${i.reportId}|${i.period}`; if (seenP.has(k)) return; seenP.add(k);
+  mine.filter((i) => isRepItem(i) && i.status !== 'rejected').forEach((i) => { const k = `${i.officeId}|${i.reportId}|${i.period}`; if (seenP.has(k)) return; seenP.add(k);
     const agg = periodOf(rms, i); if (!agg.done && !agg.verify) lacking.push(agg.recs[agg.recs.length - 1]); });
   const incomplete = [...verify, ...lacking];
   const teamNames = [...new Set(myTeams(refs).map((t) => refs.team[t]?.data.name).filter(Boolean))].join(', ');
@@ -679,6 +684,9 @@ function libraryHtml(refs, rms, q) {
     <section class="panel" style="margin-top:20px"><div class="panel-head"><h2>Report Groups · ${rms.groups.length}</h2>${edit ? '<span class="r"><button class="btn" id="edit-groups">Edit Groups</button></span>' : ''}</div>
       ${rms.groups.length ? `<div class="note chips">${rms.groups.map((g) => pill(g.name + ' · ' + inGroup(g.id), 'blue')).join('')}</div>`
         : `<div class="note">No groups yet. The team decides its own groups (for example by what the reports contain), then assigns each report to one. Groups organize Receiving, the Submission Monitor and later the encoding.</div>`}</section>
+    <section class="panel" style="margin-top:20px"><div class="panel-head"><h2>Other Submission Types · ${rms.otherTypes.length}</h2>${edit ? '<span class="r"><button class="btn" id="edit-other">Edit Types</button></span>' : ''}</div>
+      <div class="note chips" style="display:flex;flex-wrap:wrap;gap:6px">${rms.otherTypes.map((t) => pill(t.name + ' · ' + t.code + (t.starts && t.starts[new Date().getFullYear()] ? ' · starts ' + String(t.starts[new Date().getFullYear()]).padStart(4, '0') : ''), 'blue')).join('')}</div>
+      <div class="note">Documents that are not a monitored report or a letter (MOA, ordinance, resolution…). Numbered per office, type and year, e.g. PGQ-OPAC-MOA-${new Date().getFullYear()}-0001. Not in the Submission Monitor.</div></section>
     <section class="panel" style="margin-top:20px">
       <div class="panel-head"><h2>Reports · ${list.filter((r) => r.active !== false).length}</h2>${list.length ? '<span class="r"><label class="sr-only" for="find-rep">Search reports</label><input class="input" id="find-rep" placeholder="Search reports" style="width:200px"></span>' : ''}</div>
       ${list.length ? `<div class="t-head" style="${cols}"><span>Code</span><span>Report</span><span>Schedule</span><span>Checklist</span><span>Used by</span><span></span></div>
@@ -695,12 +703,52 @@ function libraryHtml(refs, rms, q) {
 function wireLibrary(refs, rms) {
   const add = $('#add-report'); if (add) add.onclick = () => editReport(refs, rms, null);
   const eg = $('#edit-groups'); if (eg) eg.onclick = () => editGroups(refs, rms);
+  const eo = $('#edit-other'); if (eo) eo.onclick = () => editOtherTypes(refs, rms);
   const st = $('#st-save'); if (st) st.onclick = async () => {
     await store.save('rms_settings', 'office', { startPeriod: $('#st-y').value + '-' + $('#st-m').value }, by(refs));
     toast('Monitoring start saved.', 'ok'); };
   $$('[data-edit-rep]').forEach((b) => { b.onclick = () => editReport(refs, rms, b.dataset.editRep); });
   $$('[data-view-rep]').forEach((b) => { b.onclick = () => viewReport(rms, b.dataset.viewRep); });
   const f = $('#find-rep'); if (f) f.oninput = () => { const v = f.value.trim().toLowerCase(); $$('#rep-list .t-row').forEach((r) => { r.hidden = v && !r.dataset.find.includes(v); }); $$('#rep-list .rep-grp').forEach((h) => { h.hidden = !!v; }); };
+}
+
+// Other Submission types: name, code (used in the number) and, if an office already numbered them by hand, the number to
+// start this year at. A code already used keeps its code.
+async function editOtherTypes(refs, rms) {
+  const y = new Date().getFullYear();
+  const list = rms.otherTypes.map((t) => ({ ...t, starts: { ...(t.starts || {}) } }));
+  const used = new Set(rms.items.filter((i) => i.kind === 'other').map((i) => i.docType));
+  let out = null;
+  const res = await modal({ title: 'Other Submission Types',
+    body: `<p class="hint">Code: used in the number (PGQ-OPAC-<b>MOA</b>-${y}-0001). “Start ${y} at”: only if numbering already started by hand, e.g. 16 makes the next one 0016.</p>
+      <div class="list-edit" id="ot-items"></div>`,
+    onOpen: (bg) => {
+      const keep = () => { $$('[data-on]', bg).forEach((x) => { list[+x.dataset.on].name = x.value; }); $$('[data-oc]', bg).forEach((x) => { list[+x.dataset.oc].code = x.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+        $$('[data-os]', bg).forEach((x) => { const t = list[+x.dataset.os]; const v = parseInt(x.value, 10); if (v > 1) t.starts[y] = v; else delete t.starts[y]; }); };
+      const draw = () => {
+        $('#ot-items', bg).innerHTML = list.map((t, k) => `<div><input class="input mono" data-oc="${k}" value="${esc(t.code)}" ${used.has(t.code) ? 'readonly title="In use"' : ''} style="width:80px" aria-label="Code">
+            <input class="input txt" data-on="${k}" value="${esc(t.name)}" aria-label="Name"><input class="input" type="number" min="1" data-os="${k}" value="${esc(t.starts[y] || '')}" placeholder="Start ${y} at" style="width:120px" aria-label="Start ${y} at">
+            ${used.has(t.code) ? '<small class="hint">in use</small>' : `<button type="button" class="mini" data-rm="${k}" aria-label="Remove">×</button>`}</div>`).join('')
+          + `<div><input class="input mono" id="ot-nc" placeholder="Code" style="width:80px"><input class="input" id="ot-nn" placeholder="+ New type name (e.g. Contract), then press Enter"></div>`;
+        $$('[data-rm]', bg).forEach((b) => { b.onclick = () => { keep(); list.splice(+b.dataset.rm, 1); draw(); }; });
+        $('#ot-nn', bg).onkeydown = (e) => { if (e.key !== 'Enter') return; e.preventDefault(); keep();
+          const code = $('#ot-nc', bg).value.toUpperCase().replace(/[^A-Z0-9]/g, ''), name = $('#ot-nn', bg).value.trim();
+          if (!code || !name) return toast('Enter both a code (e.g. CON) and a name.', 'bad');
+          if (list.some((x) => x.code === code)) return toast('That code is already in the list.', 'bad');
+          list.push({ code, name, starts: {} }); draw(); };
+      };
+      bg._keep = keep; draw();
+    },
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Save', cls: 'primary', value: 'save', check: (bg) => {
+      bg._keep();
+      const nc = $('#ot-nc', bg).value.toUpperCase().replace(/[^A-Z0-9]/g, ''), nn = $('#ot-nn', bg).value.trim();
+      if (nc && nn && !list.some((x) => x.code === nc)) list.push({ code: nc, name: nn, starts: {} });
+      if (list.some((t) => !t.code || !t.name.trim())) { toast('Every type needs a code and a name.', 'bad'); return false; }
+      if (new Set(list.map((t) => t.code)).size !== list.length) { toast('Two types have the same code.', 'bad'); return false; }
+      out = list.map((t) => ({ code: t.code, name: t.name.trim(), ...(Object.keys(t.starts).length ? { starts: t.starts } : {}) })); return true; } }] });
+  if (res !== 'save') return;
+  await store.save('rms_settings', 'othertypes', { types: out }, by(refs));
+  toast('Other Submission types saved.', 'ok');
 }
 
 // The team's report groups: add, rename, reorder, remove. Reports in a removed group show under "No group".
@@ -989,7 +1037,7 @@ async function editOffice(refs, rms, a, extra) {
 // received for this office, so the period totals and the Submission Monitor keep counting it. A renamed extra office also
 // updates the name kept on its outgoing and PSAO records.
 async function applyRenames(refs, rms, oid, o, out, newLabel) {
-  const items = rms.items.filter((i) => i.officeId === oid && i.kind !== 'comm');
+  const items = rms.items.filter((i) => i.officeId === oid && isRepItem(i));
   const notes = new Set([o.note, out.note].filter(Boolean));
   const retired = { ...(out.retired || o.retired || {}) };
   // Names in the received records of a report that are no longer in the office's list (renamed now or earlier).
