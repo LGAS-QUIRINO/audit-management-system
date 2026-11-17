@@ -514,10 +514,25 @@ function logRows(refs, rms, teamId, f) {
   const keys = [...groups.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : (rms.folders.find((x) => x.id === a)?.code || '').localeCompare(rms.folders.find((x) => x.id === b)?.code || '', undefined, { numeric: true })));
   return { offs, count: rows.length, groups: keys.map((k) => ({ folder: rms.folders.find((x) => x.id === k) || null, files: groups.get(k) })) };
 }
+// What a transmittal brought (a logbook records what was received; what is missing is for the Submission Monitor).
+// Lists of offices or bank accounts: the count and the first three names, e.g. "8 offices: QIP (GF), … and 5 more".
 function particulars(rms, offs, i) {
   const d = describe(rms, offs, i);
-  const miss = isRepItem(i) ? (i.checklist || []).filter((c) => !(c.ok || c.na || c.optional)).length : 0;
-  return { office: d.office, more: d.what + (i.pages ? ' · ' + i.pages : '') + (miss ? ` · ${miss} document${miss > 1 ? 's' : ''} missing` : '') };
+  if (!isRepItem(i)) return { office: d.office, more: d.what + (i.pages ? ' · ' + i.pages : '') };
+  const recs = i.batchId ? batchOf(rms, i) : [i], r = rms.reports.find((x) => x.id === i.reportId);
+  const ents = recs.flatMap((x) => (x.checklist || []).filter((c) => c.ok || c.na));
+  const perLine = !!(r && r.perOffice) || ents.some((c) => c.line);
+  let what;
+  if (perLine) {
+    const lines = [...new Set(ents.map((c) => c.line || c.item))], lbl = String(i.lineLabel || r?.lineLabel || 'line').toLowerCase();
+    const docs = ents.filter((c) => c.ok).length, hasParts = ents.some((c) => c.part);
+    what = `submitted: ${lines.length} ${lbl}${lines.length === 1 ? '' : 's'}${hasParts ? ` (${docs} document${docs === 1 ? '' : 's'})` : ''}`
+      + (lines.length ? ': ' + lines.slice(0, 3).join(', ') + (lines.length > 3 ? ` … and ${lines.length - 3} more` : '') : '');
+  } else {
+    const items = [...new Set(ents.filter((c) => c.ok).map((c) => c.item))];
+    what = items.length ? 'submitted: ' + items.join(', ') : 'submitted: —';
+  }
+  return { office: d.office, more: d.what + (i.batchId ? ' (one transmittal)' : '') + ' · ' + what };
 }
 function logTableHtml(rms, data) {
   let n = 0;
