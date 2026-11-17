@@ -55,7 +55,7 @@ function teamFiles(refs, rms, teamId) {
 }
 function describe(rms, offs, i) {
   const off = offs.find((o) => o.id === i.officeId);
-  const what = i.kind === 'comm' ? 'Communication · ' + (i.subject || '') : i.kind === 'other' ? (i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '') + (i.docNo ? ' · ' + i.docNo : '') : (i.reportCode || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period));
+  const what = i.kind === 'comm' ? 'Communication · ' + (i.subject || '') : i.kind === 'other' ? (i.docKind || i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '') + (i.docNo ? ' · ' + i.docNo : '') : (i.reportCode || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period));
   return { office: i.fromOutside || off?.label || '', what };
 }
 const findText = (rms, offs, i) => { const d = describe(rms, offs, i); return [numberOf(i), d.office, d.what, i.reportCode, ...(i.batchId ? batchOf(rms, i).map((x) => periodLabel(x.period)) : [i.period && periodLabel(i.period)]), i.subject].filter(Boolean).join(' ').toLowerCase(); };

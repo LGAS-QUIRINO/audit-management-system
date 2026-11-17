@@ -65,7 +65,7 @@ async function loadRms() {
     psao: items.filter(isPsao).map((i) => ({ id: i.id, ...i.data, ...(i.pending && !i.version ? { _new: true } : {}) })),
     psaoTypes: (psaoSet && psaoSet.data && psaoSet.data.types) || [],
     // Other Submission types (MOA, Ordinance, Resolution…), set in the Report Library; starts: { '2026': 16 } = start 2026 at 0016.
-    otherTypes: (otherSet && otherSet.data && otherSet.data.types) || [{ code: 'MOA', name: 'Memorandum of Agreement' }, { code: 'ORD', name: 'Ordinance' }, { code: 'RES', name: 'Resolution' }],
+    otherTypes: withKinds((otherSet && otherSet.data && otherSet.data.types) || [{ code: 'MOA', name: 'Memorandum of Agreement' }, { code: 'ORD', name: 'Ordinance' }, { code: 'RES', name: 'Resolution' }]),
     // Report groups made by the team (Report Library), in their set order.
     groups: (groups && groups.data && groups.data.list) || [],
     startPeriod: (settings && settings.data && settings.data.startPeriod) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
@@ -73,6 +73,9 @@ async function loadRms() {
 // The tab name of the per-line view, from the report's "Each line is a" (BRS → By Bank Account, TB → By Office).
 const titleCase = (t) => String(t || 'Line').trim().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 export const byLineTab = (r) => 'By ' + titleCase(r && r.lineLabel);
+// MOA covers every agreement (agreed 17 Nov 2026): "Agreements and Contracts", with kinds to choose from at receiving.
+const AGREEMENT_KINDS = ['Memorandum of Agreement (MOA)', 'Memorandum of Understanding (MOU)', 'Contract of Commodatum', 'Prepositioning Agreement', 'Other agreement / contract'];
+const withKinds = (types) => types.map((t) => (t.code === 'MOA' && !t.kinds ? { ...t, name: t.name === 'Memorandum of Agreement' ? 'Agreements and Contracts' : t.name, kinds: AGREEMENT_KINDS } : t));
 const dueText = (r) => !r.due || r.due.kind === 'none' ? 'No set due date'
   : r.due.kind === 'after' ? `${r.due.days} days after the period ends`
   : r.due.kind === 'date' ? `${MONTHS_LONG[(r.due.month || 1) - 1]} ${r.due.day} after the period ends` : `Day ${r.due.day} of the following period`;
@@ -685,7 +688,7 @@ function libraryHtml(refs, rms, q) {
       ${rms.groups.length ? `<div class="note chips">${rms.groups.map((g) => pill(g.name + ' · ' + inGroup(g.id), 'blue')).join('')}</div>`
         : `<div class="note">No groups yet. The team decides its own groups (for example by what the reports contain), then assigns each report to one. Groups organize Receiving, the Submission Monitor and later the encoding.</div>`}</section>
     <section class="panel" style="margin-top:20px"><div class="panel-head"><h2>Other Submission Types · ${rms.otherTypes.length}</h2>${edit ? '<span class="r"><button class="btn" id="edit-other">Edit Types</button></span>' : ''}</div>
-      <div class="note chips" style="display:flex;flex-wrap:wrap;gap:6px">${rms.otherTypes.map((t) => pill(t.name + ' · ' + t.code + (t.starts && t.starts[new Date().getFullYear()] ? ' · starts ' + String(t.starts[new Date().getFullYear()]).padStart(4, '0') : ''), 'blue')).join('')}</div>
+      <div class="note chips" style="display:flex;flex-wrap:wrap;gap:6px">${rms.otherTypes.map((t) => pill(t.name + ' · ' + t.code + ((t.kinds || []).length ? ' · ' + t.kinds.length + ' kinds' : '') + (t.starts && t.starts[new Date().getFullYear()] ? ' · starts ' + String(t.starts[new Date().getFullYear()]).padStart(4, '0') : ''), 'blue')).join('')}</div>
       <div class="note">Documents that are not a monitored report or a letter (MOA, ordinance, resolution…). Numbered per office, type and year, e.g. PGQ-OPAC-MOA-${new Date().getFullYear()}-0001. Not in the Submission Monitor.</div></section>
     <section class="panel" style="margin-top:20px">
       <div class="panel-head"><h2>Reports · ${list.filter((r) => r.active !== false).length}</h2>${list.length ? '<span class="r"><label class="sr-only" for="find-rep">Search reports</label><input class="input" id="find-rep" placeholder="Search reports" style="width:200px"></span>' : ''}</div>
@@ -716,19 +719,22 @@ function wireLibrary(refs, rms) {
 // start this year at. A code already used keeps its code.
 async function editOtherTypes(refs, rms) {
   const y = new Date().getFullYear();
-  const list = rms.otherTypes.map((t) => ({ ...t, starts: { ...(t.starts || {}) } }));
+  const list = rms.otherTypes.map((t) => ({ ...t, starts: { ...(t.starts || {}) }, kinds: [...(t.kinds || [])] }));
   const used = new Set(rms.items.filter((i) => i.kind === 'other').map((i) => i.docType));
   let out = null;
   const res = await modal({ title: 'Other Submission Types',
-    body: `<p class="hint">Code: used in the number (PGQ-OPAC-<b>MOA</b>-${y}-0001). “Start ${y} at”: only if numbering already started by hand, e.g. 16 makes the next one 0016.</p>
+    body: `<p class="hint">Code: used in the number (PGQ-OPAC-<b>MOA</b>-${y}-0001). “Start ${y} at”: only if numbering already started by hand, e.g. 16 makes the next one 0016.
+        Kinds (optional, separated by ;): choices under the type at receiving, e.g. for Agreements and Contracts: MOA; MOU; Contract of Commodatum.</p>
       <div class="list-edit" id="ot-items"></div>`,
     onOpen: (bg) => {
-      const keep = () => { $$('[data-on]', bg).forEach((x) => { list[+x.dataset.on].name = x.value; }); $$('[data-oc]', bg).forEach((x) => { list[+x.dataset.oc].code = x.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+      const keep = () => { $$('[data-ok]', bg).forEach((x) => { list[+x.dataset.ok].kinds = x.value.split(';').map((k) => k.trim()).filter(Boolean); });
+        $$('[data-on]', bg).forEach((x) => { list[+x.dataset.on].name = x.value; }); $$('[data-oc]', bg).forEach((x) => { list[+x.dataset.oc].code = x.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
         $$('[data-os]', bg).forEach((x) => { const t = list[+x.dataset.os]; const v = parseInt(x.value, 10); if (v > 1) t.starts[y] = v; else delete t.starts[y]; }); };
       const draw = () => {
         $('#ot-items', bg).innerHTML = list.map((t, k) => `<div><input class="input mono" data-oc="${k}" value="${esc(t.code)}" ${used.has(t.code) ? 'readonly title="In use"' : ''} style="width:80px" aria-label="Code">
             <input class="input txt" data-on="${k}" value="${esc(t.name)}" aria-label="Name"><input class="input" type="number" min="1" data-os="${k}" value="${esc(t.starts[y] || '')}" placeholder="Start ${y} at" style="width:120px" aria-label="Start ${y} at">
-            ${used.has(t.code) ? '<small class="hint">in use</small>' : `<button type="button" class="mini" data-rm="${k}" aria-label="Remove">×</button>`}</div>`).join('')
+            ${used.has(t.code) ? '<small class="hint">in use</small>' : `<button type="button" class="mini" data-rm="${k}" aria-label="Remove">×</button>`}</div>
+            <div style="padding-top:0"><span class="hint" style="width:80px;flex:none">Kinds</span><input class="input txt" data-ok="${k}" value="${esc((t.kinds || []).join('; '))}" placeholder="optional, e.g. MOA; MOU; Contract of Commodatum"></div>`).join('')
           + `<div><input class="input mono" id="ot-nc" placeholder="Code" style="width:80px"><input class="input" id="ot-nn" placeholder="+ New type name (e.g. Contract), then press Enter"></div>`;
         $$('[data-rm]', bg).forEach((b) => { b.onclick = () => { keep(); list.splice(+b.dataset.rm, 1); draw(); }; });
         $('#ot-nn', bg).onkeydown = (e) => { if (e.key !== 'Enter') return; e.preventDefault(); keep();
@@ -745,7 +751,7 @@ async function editOtherTypes(refs, rms) {
       if (nc && nn && !list.some((x) => x.code === nc)) list.push({ code: nc, name: nn, starts: {} });
       if (list.some((t) => !t.code || !t.name.trim())) { toast('Every type needs a code and a name.', 'bad'); return false; }
       if (new Set(list.map((t) => t.code)).size !== list.length) { toast('Two types have the same code.', 'bad'); return false; }
-      out = list.map((t) => ({ code: t.code, name: t.name.trim(), ...(Object.keys(t.starts).length ? { starts: t.starts } : {}) })); return true; } }] });
+      out = list.map((t) => ({ code: t.code, name: t.name.trim(), kinds: t.kinds || [], ...(Object.keys(t.starts).length ? { starts: t.starts } : {}) })); return true; } }] });
   if (res !== 'save') return;
   await store.save('rms_settings', 'othertypes', { types: out }, by(refs));
   toast('Other Submission types saved.', 'ok');

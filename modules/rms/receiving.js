@@ -402,7 +402,7 @@ export function receivingHtml(refs, rms, q) {
     return `${(i.checklist || []).filter((c) => c.ok).length} document(s) in this transmittal`; };
   const off = (id) => offs.find((o) => o.id === id);
   const rep = (id) => rms.reports.find((r) => r.id === id);
-  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : i.kind === 'other' ? esc((i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '')) : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
+  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : i.kind === 'other' ? esc((i.docKind || i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '')) : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
   const cols = 'grid-template-columns:minmax(190px,1.2fr) minmax(170px,1fr) 120px 220px 170px';
   const row = (i, acts) => `<div class="t-row" style="${cols}"><span class="mono"><b>${esc(numberOf(i))}</b>${i._new ? '<br><small class="warn-t">not yet confirmed</small>' : ''}</span>
     <span>${esc(i.kind === 'comm' && !i.officeId ? i.fromOutside : off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span>
@@ -487,7 +487,9 @@ async function receiveForm(refs, rms, preset = null) {
       <div id="other-part" hidden>
         <div class="two"><div class="field"><label for="f-otype">Document type</label><select class="input" id="f-otype">${(rms.otherTypes || []).map((t) => `<option value="${esc(t.code)}">${esc(t.name)} (${esc(t.code)})</option>`).join('')}</select>
             <span class="hint" id="f-ono"></span></div>
-          <div class="field"><label for="f-otitle">Title / description</label><input class="input" id="f-otitle" placeholder="e.g. MOA between PGQ and DPWH on the farm-to-market road"></div></div>
+          <div class="field" id="f-okind-box" hidden><label for="f-okind">Kind</label><select class="input" id="f-okind"></select></div></div>
+        <div class="two">
+          <div class="field"><label for="f-otitle">Title / description</label><input class="input" id="f-otitle" placeholder="e.g. MOA between PGQ and DPWH on the farm-to-market road"></div><div></div></div>
         <div class="two"><div class="field"><label for="f-odoc">Document no. (optional)</label><input class="input" id="f-odoc" placeholder="e.g. MOA No. 12, s. 2026"></div>
           <div class="field"><label for="f-odate">Document date (optional)</label><input class="input" type="date" id="f-odate"></div></div>
         <div class="field" style="max-width:220px"><label for="f-opages">Pages / Attachments (optional)</label><input class="input" id="f-opages" placeholder="e.g. 6 pages"></div>
@@ -687,7 +689,10 @@ async function receiveForm(refs, rms, preset = null) {
       // Other Submission: the next number of the chosen type for this office (series per office, type and year).
       const otherNo = () => { if (kind() !== 'other') return; const o = office(), code = $('#f-otype', bg).value, y = new Date($('#f-date', bg).value || now).getFullYear();
         $('#f-ono', bg).textContent = o && o.code && code ? `Number: ${o.code}-${code}-${y}-…` : ''; };
-      $('#f-otype', bg).onchange = otherNo;
+      // Kinds of a type (e.g. Agreements and Contracts: MOA, MOU, Contract of Commodatum…).
+      const otherKinds = () => { const t = (rms.otherTypes || []).find((x) => x.code === $('#f-otype', bg).value), ks = (t && t.kinds) || [];
+        $('#f-okind-box', bg).hidden = !ks.length; $('#f-okind', bg).innerHTML = ks.map((k) => `<option>${esc(k)}</option>`).join(''); };
+      $('#f-otype', bg).onchange = () => { otherKinds(); otherNo(); }; otherKinds();
       $$('input[name=kind]', bg).forEach((x) => { x.onchange = kindState; });
       $('#f-outside', bg).onchange = () => { const o = $('#f-outside', bg).checked; $('#f-outside-box', bg).hidden = !o; $('#f-mun', bg).disabled = o; $('#f-off', bg).disabled = o; };
       // Open on the municipality used last, or else the first one with offices ready to receive.
@@ -808,7 +813,7 @@ async function receiveForm(refs, rms, preset = null) {
         const title = $('#f-otitle', bg).value.trim(); if (!title) { toast('Enter the title or a short description.', 'bad'); return false; }
         const year = new Date(when.iso).getFullYear(), key = o.id + '|o:' + t.code, start = +((t.starts || {})[year] || 0);
         const n = Math.max(start - 1, 0, ...rms.items.filter((i) => i.seriesKey === key && i.trackingYear === year).map((i) => i.series || 0)) + 1;
-        out = { ...base, kind: 'other', docType: t.code, docTypeName: t.name, reportCode: t.code, subject: title, docNo: $('#f-odoc', bg).value.trim(), docDate: $('#f-odate', bg).value,
+        out = { ...base, kind: 'other', docType: t.code, docTypeName: t.name, ...((t.kinds || []).length ? { docKind: $('#f-okind', bg).value } : {}), reportCode: t.code, subject: title, docNo: $('#f-odoc', bg).value.trim(), docDate: $('#f-odate', bg).value,
           pages: $('#f-opages', bg).value.trim(), status: 'received', trackingNo: `${o.code}-${t.code}-${year}-${String(n).padStart(4, '0')}`, series: n, trackingYear: year, seriesKey: key };
       } else {
         const subject = $('#f-subj', bg).value.trim();
@@ -979,7 +984,7 @@ export async function viewItem(refs, rms, id) {
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   const row = (k, v) => `<div class="kvrow"><small>${k}</small><span>${v}</span></div>`;
   modal({ title: numberOf(i), body: `${row('Status', statusPill(i))}${row('Office', esc(i.fromOutside || off?.label || ''))}
-    ${i.kind === 'other' ? row('Document', esc((i.docTypeName || i.reportCode) + ' · ' + i.subject) + (i.docNo || i.docDate ? `<br><small>${esc([i.docNo, i.docDate && fmtDate(i.docDate)].filter(Boolean).join(' · '))}</small>` : '')) + (i.pages ? row('Pages', esc(i.pages)) : '')
+    ${i.kind === 'other' ? row('Document', esc((i.docKind || i.docTypeName || i.reportCode) + ' · ' + i.subject) + (i.docNo || i.docDate ? `<br><small>${esc([i.docNo, i.docDate && fmtDate(i.docDate)].filter(Boolean).join(' · '))}</small>` : '')) + (i.pages ? row('Pages', esc(i.pages)) : '')
       : i.kind === 'comm' ? row('Subject', esc(i.subject)) + (i.pages ? row('Pages', esc(i.pages)) : '') : row('Report', esc(i.reportCode + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) + ' (' + batchOf(rms, i).length + ' periods, one tracking number)' : periodLabel(i.period))))}
     ${row('Received', esc(fmtDate(i.receivedAt) + ', ' + new Date(i.receivedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) + ' by ' + esc(i.receivedByName)
       + (encodedLater(i) ? `<br><small>Encoded later: ${esc(fmtDT(i.encodedAt))}</small>` : ''))}
@@ -1280,7 +1285,7 @@ export function printSlip(refs, rms, i) {
     <div class="title">ACKNOWLEDGMENT RECEIPT</div>
     <div class="no"><small>${pend ? 'PENDING CODE' : 'TRACKING NUMBER'}</small><b>${esc(numberOf(i))}</b></div>
     <div class="kv"><span>${i.fromOutside ? 'From' : 'Office'}</span><span><b>${esc(i.fromOutside || off?.label || '')}</b></span>
-      ${i.kind === 'other' ? `<span>Document</span><span>${esc((i.docTypeName || i.reportCode) + ' · ' + i.subject)}${i.docNo ? ' · ' + esc(i.docNo) : ''}${i.pages ? ' · ' + esc(i.pages) : ''}</span>`
+      ${i.kind === 'other' ? `<span>Document</span><span>${esc((i.docKind || i.docTypeName || i.reportCode) + ' · ' + i.subject)}${i.docNo ? ' · ' + esc(i.docNo) : ''}${i.pages ? ' · ' + esc(i.pages) : ''}</span>`
         : i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + (many ? periodsText(batch.map((x) => x.period)) + ' (' + batch.length + ' periods)' : periodLabel(i.period)))}</span>`}
       <span>Received</span><span>${esc(new Date(i.receivedAt).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>
       <span>Received from</span><span>${esc(i.submittedBy)}${i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''}</span></div>
