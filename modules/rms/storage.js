@@ -549,7 +549,6 @@ export function logbookHtml(refs, rms, q) {
   const rooms = roomsOf(rms, team.id), folders = foldersOfTeam(rms, team.id);
   const opt = (v, t, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(t)}</option>`;
   const grouped = ['Reports', 'Other submissions', 'Communications'].map((g) => { const l = docs.filter((d) => d.group === g); return l.length ? `<optgroup label="${g}">${l.map((d) => opt(d.key, d.code === 'COMM' ? d.name : `${d.code} · ${d.name}`, f.doc)).join('')}</optgroup>` : ''; }).join('');
-  const sg = signers(refs, team);
   return `<div class="hello"><div><h1>Records Logbook · ${esc(team.data.name)}</h1><p>One logbook per document: every record, folder by folder, with where its soft copy and hard copy are kept.</p></div>
       <div class="btn-row">${teamSel(refs, team, 'logbook')}<button class="btn" id="lb-print" type="button">Print</button><div class="dl-wrap"><button class="btn primary" id="lb-dl" type="button">Download ▾</button>
         <div class="dl-menu" id="lb-dl-menu" hidden><button type="button" data-ldl="pdf">PDF</button><button type="button" data-ldl="xlsx">Excel</button><button type="button" data-ldl="docx">Word</button><button type="button" data-ldl="all">Excel · all documents</button></div></div></div></div>
@@ -568,7 +567,6 @@ export function logbookHtml(refs, rms, q) {
         <div class="lb-title">RECORDS LOGBOOK · ${esc(doc.code === 'COMM' ? 'COMMUNICATIONS' : doc.code)}</div>
         <div class="lb-sub">${esc(doc.name)} · ${esc(f.folder ? 'Folder ' + (folders.find((x) => x.id === f.folder)?.code || '') : f.room ? rooms.find((r) => r.id === f.room)?.name || '' : 'All folders')} · ${esc(rangeText(f))} · ${data.count} record${data.count === 1 ? '' : 's'}</div>
         ${logTableHtml(rms, data)}
-        <div class="lb-sig">${sg.map((x) => `<div><b>${esc(x.name || ' ')}</b><span>${esc(x.role)}</span></div>`).join('')}</div>
         <div class="lb-foot"><span>AMS · Records Logbook · ${esc(team.data.name)}</span><span>Printed ${esc(fmtDate(new Date()))}</span></div>
       </div></section>`;
 }
@@ -586,7 +584,7 @@ export function wireLogbook(refs, rms, q) {
   $('#lb-dl').onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
   if (!window.__lbDlClose) { window.__lbDlClose = true; document.addEventListener('click', () => { const m = document.getElementById('lb-dl-menu'); if (m) m.hidden = true; }); }
   const infoFor = (doc, data) => ({ title: `RECORDS LOGBOOK · ${doc.code === 'COMM' ? 'COMMUNICATIONS' : doc.code} (${doc.name})`, filters: `${team.data.name} · ${f.folder ? 'Folder ' + (rms.folders.find((x) => x.id === f.folder)?.code || '') : f.room ? rms.rooms.find((r) => r.id === f.room)?.name || '' : 'All folders'} · ${rangeText(f)}`,
-    counts: `${data.count} record${data.count === 1 ? '' : 's'}`, notes: [], legend: null, sign: signers(refs, team), navy: true, sheet: doc.code === 'COMM' ? 'Communications' : doc.code,
+    counts: `${data.count} record${data.count === 1 ? '' : 's'}`, notes: [], legend: null, navy: true, sheet: doc.code === 'COMM' ? 'Communications' : doc.code,
     widths: [4, 14, 11, 21, 34, 20, 18, 12], align: ['c', 'l', 'l', 'l', 'l', 'l', 'l', 'l'], fileBase: `Records Logbook ${doc.code} ${team.data.name}`,
     made: 'Printed ' + new Date().toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) });
   const tableOf = (data) => { const t = document.createElement('template'); t.innerHTML = logTableHtml(rms, data).trim(); return t.content.firstElementChild; };
