@@ -37,14 +37,14 @@ export const filesIn = (rms, folderId) => rms.items.filter((i) => i.folderId ===
 // Where a folder is: "Shelf 2 · PSAO Records Room".
 export function whereOf(rms, f) {
   const p = f && rms.places.find((x) => x.id === f.placeId), r = p && rms.rooms.find((x) => x.id === p.roomId);
-  return { place: p, room: r, text: [placeName(p), r && r.name].filter(Boolean).join(' · ') };
+  return { place: p, room: r, text: [placeName(p), r && r.name].filter(Boolean).join(' · ') || 'No location yet' };
 }
 // Where a received file is: Room › Sack/Shelf › Folder (null when not yet filed).
 export function locationOf(rms, i) {
   const f = i && i.folderId && rms.folders && rms.folders.find((x) => x.id === i.folderId);
   if (!f) return null;
   const w = whereOf(rms, f);
-  return { folder: f, ...w, text: [w.room && w.room.name, placeName(w.place), f.code].filter(Boolean).join(' › ') };
+  return { folder: f, ...w, text: w.place ? [w.room && w.room.name, placeName(w.place), f.code].filter(Boolean).join(' › ') : f.code + ' (no location yet)' };
 }
 // Files of a team that can be filed: received reports and communications (one row per tracking number).
 function teamFiles(refs, rms, teamId) {
@@ -58,6 +58,9 @@ function describe(rms, offs, i) {
   return { office: i.fromOutside || off?.label || '', what };
 }
 const findText = (rms, offs, i) => { const d = describe(rms, offs, i); return [numberOf(i), d.office, d.what, i.reportCode, ...(i.batchId ? batchOf(rms, i).map((x) => periodLabel(x.period)) : [i.period && periodLabel(i.period)]), i.subject].filter(Boolean).join(' ').toLowerCase(); };
+
+// The place of a folder as a pill (amber "No location yet" when not placed).
+const wherePill = (w) => w.place ? `${pill(placeName(w.place), w.place.type === 'sack' ? 'sack' : 'blue')} <small>${esc(w.room?.name || '')}</small>` : pill('No location yet', 'warn');
 
 /* ---------- saving ---------- */
 const strip = (x) => { const { id: _i, _new: _n, ...rest } = x; return rest; };
@@ -76,19 +79,20 @@ export function foldersHtml(refs, rms, q) {
   if (!team) return `<div class="msg bad">No team is assigned to you yet. Ask the Admin to set your team in Users &amp; Roles.</div>`;
   if (q.get('f')) return folderHtml(refs, rms, q, team);
   const rooms = roomsOf(rms, team.id), rf = q.get('r') || 'all';
-  const list = foldersOfTeam(rms, team.id).filter((f) => rf === 'all' || whereOf(rms, f).room?.id === rf);
+  const list = foldersOfTeam(rms, team.id).filter((f) => rf === 'all' || (rf === 'none' ? !whereOf(rms, f).place : whereOf(rms, f).room?.id === rf));
+  const unplaced = foldersOfTeam(rms, team.id).filter((f) => !whereOf(rms, f).place).length;
   const cols = 'grid-template-columns:minmax(170px,1fr) minmax(220px,1.4fr) minmax(170px,1.2fr) minmax(120px,1fr) 90px';
   const row = (f) => { const w = whereOf(rms, f), files = filesIn(rms, f.id), reps = [...new Set(files.map((x) => x.reportCode || (x.kind === 'comm' ? 'Comm.' : '')).filter(Boolean))];
     const find = [f.code, w.text, f.remarks, ...files.map((x) => numberOf(x))].join(' ').toLowerCase();
     return `<div class="t-row" style="${cols}" data-find="${esc(find)}"><span class="mono"><b>${esc(f.code)}</b></span>
-      <span>${pill(placeName(w.place) || '—', w.place?.type === 'sack' ? 'sack' : 'blue')} <small>${esc(w.room?.name || '')}</small></span>
+      <span>${wherePill(w)}</span>
       <span>${files.length} file${files.length === 1 ? '' : 's'}${reps.length ? `<br><small>${esc(reps.join(', '))}</small>` : ''}</span>
       <span><small>${esc(f.remarks || '')}</small></span><span><a class="btn sm" href="#/rms/folders?t=${team.id}&f=${f.id}">Open</a></span></div>`; };
   return `<div class="hello"><div><h1>Folders · ${esc(team.data.name)}</h1><p>Each folder holds several files (received transmittals). A folder is on a cabinet/shelf, or in a sack, inside a room.</p></div>
       <div class="btn-row">${teamSel(refs, team, 'folders')}<button class="btn" id="fo-move" type="button">Move Folders…</button><button class="btn primary" id="fo-new" type="button">+ New Folder</button></div></div>
-    ${!rooms.length ? `<div class="msg">No rooms yet for ${esc(team.data.name)}. Add the rooms, cabinets/shelves and sacks first in <a href="#/rms/storage?t=${team.id}">Storage Setup</a>.</div>` : ''}
+    ${!rooms.length ? `<div class="msg">No rooms yet for ${esc(team.data.name)}. Folders can be made now and placed later; add the rooms, cabinets/shelves and sacks in <a href="#/rms/storage?t=${team.id}">Storage Setup</a>.</div>` : ''}
     <section class="panel"><div class="panel-head"><h2>Folders · ${list.length}</h2><span class="r">
-        <select class="input" id="fo-room"><option value="all">All rooms</option>${rooms.map((r) => `<option value="${r.id}" ${r.id === rf ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
+        <select class="input" id="fo-room"><option value="all">All rooms</option>${rooms.map((r) => `<option value="${r.id}" ${r.id === rf ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}${unplaced ? `<option value="none" ${rf === 'none' ? 'selected' : ''}>Not placed yet · ${unplaced}</option>` : ''}</select>
         <input class="input" id="fo-find" placeholder="Search folder code, file no., remarks" style="width:260px"></span></div>
       ${list.length ? `<div class="t-head" style="${cols}"><span>Folder Code</span><span>Where</span><span>Files</span><span>Remarks</span><span></span></div><div id="fo-list">${list.map(row).join('')}</div><p class="empty" id="fo-none" hidden>Nothing matches the search.</p>`
         : `<div class="empty"><b>No folders yet</b>Use + New Folder, then add its files.</div>`}</section>`;
@@ -104,9 +108,9 @@ function folderHtml(refs, rms, q, team) {
   const sugg = keys.size ? teamFiles(refs, rms, f.teamId).filter((i) => !i.folderId && keys.has(i.officeId + '|' + (i.reportId || 'comm'))) : [];
   const cols = 'grid-template-columns:minmax(200px,1.1fr) minmax(220px,1.5fr) 120px 130px 170px';
   return `<div class="hello"><div><p><a href="#/rms/folders?t=${f.teamId}">← Folders</a></p><h1 class="mono">${esc(f.code)}</h1>
-      <p>${pill(placeName(w.place) || '—', w.place?.type === 'sack' ? 'sack' : 'blue')} ${esc(w.room?.name || '')}${f.remarks ? ' · ' + esc(f.remarks) : ''}</p></div>
+      <p>${wherePill(w)}${f.remarks ? ' · ' + esc(f.remarks) : ''}</p></div>
       <div class="btn-row"><button class="btn" id="fd-label" type="button">Print Label</button><button class="btn" id="fd-index" type="button">Print Index</button>
-        <button class="btn" id="fd-move" type="button">Move…</button><button class="btn" id="fd-edit" type="button">Edit</button></div></div>
+        <button class="btn${w.place ? '' : ' primary'}" id="fd-move" type="button">${w.place ? 'Move…' : 'Set Location…'}</button><button class="btn" id="fd-edit" type="button">Edit</button></div></div>
     <section class="panel"><div class="panel-head"><h2>Add Files</h2></div>
       <div style="padding:14px 22px 6px"><label class="legend" for="fd-q">Type a tracking number, office, report or month (e.g. “opac brs 2026”)</label>
         <input class="input" id="fd-q" style="max-width:620px;width:100%" autocomplete="off"><div id="fd-res" class="fd-res"></div>
@@ -198,26 +202,29 @@ function readPlace(bg, rms, teamId) {
   return { id: newId('place'), make: { kind: 'store-place', teamId, roomId: room, type, ...(type === 'sack' ? { code: name.toUpperCase() } : { name }) } };
 }
 async function makePlace(refs, pl) { if (pl.make) await saveStore(refs, pl.id, pl.make); return pl.id; }
-const placeText = (rms, placeId, made) => { const p = rms.places.find((x) => x.id === placeId) || made, r = p && rms.rooms.find((x) => x.id === p.roomId); return `${placeName(p)}${r ? ' (' + r.name + ')' : ''}`; };
+const placeText = (rms, placeId, made) => { const p = (placeId && rms.places.find((x) => x.id === placeId)) || made, r = p && rms.rooms.find((x) => x.id === p.roomId); return p ? `${placeName(p)}${r ? ' (' + r.name + ')' : ''}` : 'no location'; };
 
 async function newFolder(refs, rms, team, then) {
-  if (!roomsOf(rms, team.id).length) return toast(`Add a room first in Storage Setup (${team.data.name}).`, 'bad');
+  const hasRooms = roomsOf(rms, team.id).length > 0;
   let out = null;
   const res = await modal({ title: 'New Folder · ' + team.data.name, wide: true,
     body: `<div class="field" style="max-width:320px"><label for="nf-code">Folder Code (unique in the team)</label><input class="input mono upper" id="nf-code" placeholder="e.g. F-OPAC-BRS-2026-A"></div>
-      ${placePicker(rms, team.id)}
+      <div class="field"><span class="legend">Location</span><div class="rcv-type"><label><input type="radio" name="nf-where" value="none" checked> Not placed yet (set it later)</label>
+        <label><input type="radio" name="nf-where" value="set" ${hasRooms ? '' : 'disabled'}> Choose the room and shelf or sack${hasRooms ? '' : ' (add rooms in Storage Setup first)'}</label></div></div>
+      <div id="nf-place" hidden>${hasRooms ? placePicker(rms, team.id) : ''}</div>
       <div class="field"><label for="nf-rem">Remarks (optional)</label><input class="input" id="nf-rem" placeholder="e.g. BRS 75 accounts, part 2"></div>
       <p class="hint">Then add its files with the search field.</p>`,
-    onOpen: (bg) => wirePlacePicker(bg, rms),
+    onOpen: (bg) => { wirePlacePicker(bg, rms); $$('input[name=nf-where]', bg).forEach((x) => { x.onchange = () => { $('#nf-place', bg).hidden = $('input[name=nf-where]:checked', bg).value !== 'set'; }; }); },
     buttons: [{ label: 'Cancel', value: null }, { label: 'Save Folder', cls: 'primary', value: 'save', check: (bg) => {
       const code = $('#nf-code', bg).value.trim().toUpperCase(); if (!code) { toast('Enter the Folder Code.', 'bad'); return false; }
       if (rms.folders.some((x) => live(x) && x.teamId === team.id && x.code === code)) { toast(`Folder ${code} already exists in ${team.data.name}.`, 'bad'); return false; }
-      const pl = readPlace(bg, rms, team.id); if (!pl) return false;
+      let pl = { id: '' };
+      if ($('input[name=nf-where]:checked', bg).value === 'set') { pl = readPlace(bg, rms, team.id); if (!pl) return false; }
       out = { code, pl, remarks: $('#nf-rem', bg).value.trim() }; return true; } }] });
   if (res !== 'save') return;
-  const placeId = await makePlace(refs, out.pl), id = newId('folder'), now = new Date().toISOString();
+  const placeId = out.pl.id ? await makePlace(refs, out.pl) : '', id = newId('folder'), now = new Date().toISOString();
   await saveStore(refs, id, { kind: 'store-folder', teamId: team.id, code: out.code, placeId, remarks: out.remarks,
-    history: [{ at: now, by: by(refs), byName: myName(refs), to: placeId, text: 'folder made on ' + placeText(rms, placeId, out.pl.make) }] });
+    history: [{ at: now, by: by(refs), byName: myName(refs), to: placeId, text: placeId ? 'folder made on ' + placeText(rms, placeId, out.pl.make) : 'folder made (not placed yet)' }] });
   toast(`Folder ${out.code} saved.`, 'ok');
   if (then) return then(id);
   location.hash = `#/rms/folders?t=${team.id}&f=${id}`;
@@ -263,22 +270,24 @@ async function fileTo(refs, rms, files, teamId, notId = '') {
 async function moveFolders(refs, rms, team, ids) {
   const fs = foldersOfTeam(rms, team.id);
   if (!fs.length) return toast('No folders yet.', 'bad');
+  if (!roomsOf(rms, team.id).length) return toast(`Add a room first in Storage Setup (${team.data.name}).`, 'bad');
+  const first = ids && fs.find((x) => x.id === ids[0]), placing = !!(first && !whereOf(rms, first).place);
   const shelves = rms.places.filter((p) => live(p) && p.teamId === team.id && foldersIn(rms, p.id).length);
   let out = null;
-  const res = await modal({ title: 'Move Folders · ' + team.data.name, wide: true,
-    body: `${ids ? `<p>Moving <b class="mono">${ids.map((i) => esc(fs.find((x) => x.id === i)?.code || '')).join(', ')}</b> (now ${esc(whereOf(rms, fs.find((x) => x.id === ids[0])).text)})</p>`
+  const res = await modal({ title: (placing ? 'Set Location · ' : 'Move Folders · ') + (placing ? first.code : team.data.name), wide: true,
+    body: `${ids ? `<p>${placing ? 'Placing' : 'Moving'} <b class="mono">${ids.map((i) => esc(fs.find((x) => x.id === i)?.code || '')).join(', ')}</b>${placing ? '' : ` (now ${esc(whereOf(rms, first).text)})`}</p>`
       : `<div class="field"><span class="legend">Move</span><div class="rcv-type"><label><input type="radio" name="mv-mode" value="some" checked> Chosen folders</label><label><input type="radio" name="mv-mode" value="place"> Everything on a cabinet / shelf / sack</label></div></div>
       <div id="mv-some"><input class="input" id="mv-find" placeholder="Search folder code"><div class="rcv-items long" id="mv-list">${fs.map((f) => `<label data-t="${esc(f.code.toLowerCase())}"><input type="checkbox" name="mv-f" value="${f.id}"> <span class="mono">${esc(f.code)}</span> <small>· ${esc(whereOf(rms, f).text)}</small></label>`).join('')}</div></div>
       <div id="mv-place" hidden><select class="input" id="mv-from">${shelves.map((p) => `<option value="${p.id}">${esc(placeText(rms, p.id))} · ${foldersIn(rms, p.id).length} folders</option>`).join('')}</select></div>`}
-      <span class="legend">Move to</span>${placePicker(rms, team.id, { type: 'sack' })}
-      <div class="field" style="max-width:220px"><label for="mv-date">Date moved</label><input class="input" type="date" id="mv-date" value="${today()}" max="${today()}"></div>
+      <span class="legend">${placing ? 'Place it in' : 'Move to'}</span>${placePicker(rms, team.id, { type: placing ? 'shelf' : 'sack' })}
+      <div class="field" style="max-width:220px"><label for="mv-date">${placing ? 'Date placed' : 'Date moved'}</label><input class="input" type="date" id="mv-date" value="${today()}" max="${today()}"></div>
       <p class="hint">Each folder keeps its movement history. Print the sack's contents list after moving (Storage Setup).</p>`,
     onOpen: (bg) => {
-      wirePlacePicker(bg, rms, { type: 'sack' });
+      wirePlacePicker(bg, rms, { type: placing ? 'shelf' : 'sack' });
       $$('input[name=mv-mode]', bg).forEach((x) => { x.onchange = () => { const p = $('input[name=mv-mode]:checked', bg).value === 'place'; $('#mv-some', bg).hidden = p; $('#mv-place', bg).hidden = !p; }; });
       if ($('#mv-find', bg)) $('#mv-find', bg).oninput = () => { const v = $('#mv-find', bg).value.trim().toLowerCase(); $$('#mv-list label', bg).forEach((l) => { l.hidden = v && !l.dataset.t.includes(v); }); };
     },
-    buttons: [{ label: 'Cancel', value: null }, { label: 'Move', cls: 'primary', value: 'go', check: (bg) => {
+    buttons: [{ label: 'Cancel', value: null }, { label: placing ? 'Save Location' : 'Move', cls: 'primary', value: 'go', check: (bg) => {
       let list = ids;
       if (!list) list = $('input[name=mv-mode]:checked', bg).value === 'place' ? foldersIn(rms, $('#mv-from', bg).value).map((f) => f.id) : $$('input[name=mv-f]:checked', bg).map((x) => x.value);
       if (!list || !list.length) { toast('Choose the folders to move.', 'bad'); return false; }
@@ -289,8 +298,9 @@ async function moveFolders(refs, rms, team, ids) {
   const placeId = await makePlace(refs, out.pl), to = placeText(rms, placeId, out.pl.make);
   let n = 0;
   for (const id of out.list) { const f = rms.folders.find((x) => x.id === id); if (!f || f.placeId === placeId) continue;
-    await saveStore(refs, id, { ...strip(f), placeId, history: [...(f.history || []), { at: out.at, by: by(refs), byName: myName(refs), from: f.placeId, to: placeId, text: `moved from ${placeText(rms, f.placeId)} to ${to}` }] }); n++; }
-  toast(`${n} folder${n === 1 ? '' : 's'} moved to ${to}.`, 'ok');
+    await saveStore(refs, id, { ...strip(f), placeId, history: [...(f.history || []), { at: out.at, by: by(refs), byName: myName(refs), from: f.placeId || '', to: placeId,
+      text: f.placeId ? `moved from ${placeText(rms, f.placeId)} to ${to}` : `placed on ${to}` }] }); n++; }
+  toast(placing ? `${first.code} placed on ${to}.` : `${n} folder${n === 1 ? '' : 's'} moved to ${to}.`, 'ok');
 }
 
 /* ================= Not Yet Filed ================= */
@@ -344,13 +354,14 @@ export function locationHtml(refs, rms, q) {
     <input class="input" id="lc-q" placeholder="Search a tracking number, folder code or sack code" style="width:440px;max-width:100%;margin-bottom:14px" autocomplete="off">
     <div id="lc-res"></div>
     <section class="panel"><div class="crumb" id="lc-crumb">All rooms</div>
-      <div class="tree">${rooms.map(roomNode).join('') || `<div class="empty"><b>No rooms yet</b>Add them in <a href="#/rms/storage?t=${team.id}">Storage Setup</a>.</div>`}</div></section>`;
+      <div class="tree">${rooms.map(roomNode).join('') || `<div class="empty"><b>No rooms yet</b>Add them in <a href="#/rms/storage?t=${team.id}">Storage Setup</a>.</div>`}
+        ${(() => { const un = foldersOfTeam(rms, team.id).filter((f) => !whereOf(rms, f).place); return un.length ? `<details data-node="none"><summary><span class="ic">❔</span><b>Not placed yet</b><small>${un.length} folder${un.length === 1 ? '' : 's'}</small></summary>${un.map(folderNode).join('')}</details>` : ''; })()}</div></section>`;
 }
 export function wireLocation(refs, rms, q, view) {
   const team = teamOf(q, refs); if (!team) return;
   wireTeamSel();
   const offs = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id));
-  const nameOf = (id) => { const r = rms.rooms.find((x) => x.id === id); if (r) return r.name; const p = rms.places.find((x) => x.id === id); if (p) return placeName(p); return rms.folders.find((x) => x.id === id)?.code || ''; };
+  const nameOf = (id) => { if (id === 'none') return 'Not placed yet'; const r = rms.rooms.find((x) => x.id === id); if (r) return r.name; const p = rms.places.find((x) => x.id === id); if (p) return placeName(p); return rms.folders.find((x) => x.id === id)?.code || ''; };
   // Path line: where the last opened item is.
   $$('.tree details').forEach((d) => { d.addEventListener('toggle', () => {
     if (!d.open) return;
@@ -366,7 +377,8 @@ export function wireLocation(refs, rms, q, view) {
     const folders = foldersOfTeam(rms, team.id).filter((f) => words.every((w) => f.code.toLowerCase().includes(w))).slice(0, 5);
     const sacks = rms.places.filter((p) => live(p) && p.teamId === team.id && p.type === 'sack' && words.every((w) => p.code.toLowerCase().includes(w))).slice(0, 5);
     const step = (k, v2, mono) => `<div class="step"><small>${k}</small><span class="${mono ? 'mono' : ''}">${esc(v2)}</span></div>`;
-    const path = (f) => { const w = whereOf(rms, f); return [step('Room', w.room?.name || '—'), step(w.place?.type === 'sack' ? 'Sack' : 'Cabinet / Shelf', placeName(w.place) || '—', w.place?.type === 'sack'), step('Folder', f.code, true)]; };
+    const path = (f) => { const w = whereOf(rms, f); return w.place ? [step('Room', w.room?.name || '—'), step(w.place.type === 'sack' ? 'Sack' : 'Cabinet / Shelf', placeName(w.place), w.place.type === 'sack'), step('Folder', f.code, true)]
+      : [step('Location', 'Not placed yet'), step('Folder', f.code, true)]; };
     res.innerHTML = `<section class="panel">${files.map((i) => { const f = rms.folders.find((x) => x.id === i.folderId), d = describe(rms, offs, i);
         return `<div class="panel-head"><h2 class="mono">${esc(numberOf(i))}</h2><small>${esc(d.what)} · ${esc(d.office)}</small></div>
           ${f ? `<div class="path">${[...path(f), step('File', numberOf(i), true)].join('<span class="arr">›</span>')}</div>
