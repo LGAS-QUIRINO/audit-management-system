@@ -20,7 +20,7 @@ const clean = (t) => String(t || '').replace(/\s*\n\s*/g, ' ').replace(/\s+/g, '
 function readTable(table) {
   const rowsOf = (sec) => [...table.querySelectorAll(sec + ' > tr')].filter((tr) => sec === 'thead' || !tr.hidden);
   const cellsOf = (tr) => [...tr.children].map((c) => ({ text: clean(c.innerText), colspan: +(c.getAttribute('colspan') || 1), rowspan: +(c.getAttribute('rowspan') || 1),
-    head: c.tagName === 'TH', status: statusOf(c), group: tr.classList.contains('acct-off') || tr.classList.contains('grp') }));
+    head: c.tagName === 'TH', status: statusOf(c), group: tr.classList.contains('acct-off') || tr.classList.contains('grp') || tr.classList.contains('usec'), ugroup: tr.classList.contains('usec') }));
   return { head: rowsOf('thead').map(cellsOf), body: rowsOf('tbody').map(cellsOf) };
 }
 // Lay the rows on a grid (handles colspan/rowspan): grid[r][c] = { cell, first, covered }.
@@ -114,8 +114,8 @@ function addSheet(wb, name, table, info) {
         const first = c === 0;
         cell.value = g.cell.text;
         const [fill, color] = COLORS[g.cell.status] || (head ? headColor(info) : [g.cell.group ? 'F6F8FC' : 'FFFFFF', '1B2440']);
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + (g.cell.group ? 'EEF2FA' : fill) } };
-        cell.font = { bold: head || g.cell.group || !!g.cell.status, size: head ? 9 : 10, color: { argb: 'FF' + (g.cell.group ? '0B2A6B' : color) } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + (g.cell.ugroup ? 'FDECEA' : g.cell.group ? 'EEF2FA' : fill) } };
+        cell.font = { bold: head || g.cell.group || !!g.cell.status, size: head ? 9 : 10, color: { argb: 'FF' + (g.cell.ugroup ? 'C62828' : g.cell.group ? '0B2A6B' : color) } };
         cell.alignment = { horizontal: head ? 'center' : alignOf(info, c, g.cell.group), vertical: head ? 'middle' : 'top', wrapText: true };
       });
     });
@@ -144,7 +144,7 @@ async function toPdf(table, info) {
     const [fill, color] = COLORS[c.status] || (head ? headColor(info) : [c.group ? 'F6F8FC' : 'FFFFFF', '1B2440']);
     const hex = (h) => [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
     return { content: pdfText(c.text), colSpan: c.colspan, rowSpan: c.rowspan, mark: c.text,
-      styles: { fillColor: hex(c.group ? 'EEF2FA' : fill), textColor: hex(c.group ? '0B2A6B' : color), fontStyle: head || c.group || c.status ? 'bold' : 'normal', halign: head ? 'center' : alignOf(info, k, c.group) } };
+      styles: { fillColor: hex(c.ugroup ? 'FDECEA' : c.group ? 'EEF2FA' : fill), textColor: hex(c.ugroup ? 'C62828' : c.group ? '0B2A6B' : color), fontStyle: head || c.group || c.status ? 'bold' : 'normal', halign: head ? 'center' : alignOf(info, k, c.group) } };
   }); });
   doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(11, 42, 107); doc.text('COMMISSION ON AUDIT · Province of Quirino', 36, 34);
   doc.setFontSize(14); doc.text(info.title, 36, 52);
@@ -195,12 +195,12 @@ async function toWord(table, info) {
     `<w:p><w:pPr><w:spacing w:after="40"/><w:jc w:val="${align}"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${bold ? '<w:b/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${size}"/></w:rPr><w:t xml:space="preserve">${x(text)}</w:t></w:r></w:p>`;
   const rowsXml = (G, head) => G.grid.map((row) => `<w:tr>${head ? '<w:trPr><w:tblHeader/></w:trPr>' : ''}${row.map((g, c) => {
     if (!g || !g.left) return '';
-    const cell = g.cell, [fill, color0] = COLORS[cell.status] || (head ? headColor(info) : [cell.group ? 'F6F8FC' : 'FFFFFF', '1B2440']), color = cell.group ? '0B2A6B' : color0;
+    const cell = g.cell, [fill, color0] = COLORS[cell.status] || (head ? headColor(info) : [cell.group ? 'F6F8FC' : 'FFFFFF', '1B2440']), color = cell.ugroup ? 'C62828' : cell.group ? '0B2A6B' : color0;
     const span = cell.colspan > 1 ? `<w:gridSpan w:val="${cell.colspan}"/>` : '';
     const vm = cell.rowspan > 1 ? (g.top ? '<w:vMerge w:val="restart"/>' : '<w:vMerge/>') : '';
     let width = 0; for (let j = 0; j < cell.colspan; j++) width += colW(c + j);
     const body = g.top ? `<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/>${head || cell.group || cell.status ? '<w:b/>' : ''}<w:color w:val="${color}"/><w:sz w:val="${sz}"/></w:rPr><w:t xml:space="preserve">${x(cell.text)}</w:t></w:r>` : '';
-    return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${span}${vm}<w:shd w:val="clear" w:color="auto" w:fill="${cell.group ? 'EEF2FA' : fill}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="${head ? 'center' : alignOf(info, c, cell.group)}"/></w:pPr>${body}</w:p></w:tc>`;
+    return `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/>${span}${vm}<w:shd w:val="clear" w:color="auto" w:fill="${cell.ugroup ? 'FDECEA' : cell.group ? 'EEF2FA' : fill}"/><w:vAlign w:val="center"/></w:tcPr><w:p><w:pPr><w:spacing w:after="0"/><w:jc w:val="${head ? 'center' : alignOf(info, c, cell.group)}"/></w:pPr>${body}</w:p></w:tc>`;
   }).join('')}</w:tr>`).join('');
   const bd = (k) => `<w:${k} w:val="single" w:sz="4" w:space="0" w:color="DFE5F1"/>`;
   const tbl = `<w:tbl><w:tblPr><w:tblW w:w="${usable}" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders>${['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(bd).join('')}</w:tblBorders><w:tblCellMar><w:left w:w="50" w:type="dxa"/><w:right w:w="50" w:type="dxa"/></w:tblCellMar></w:tblPr>

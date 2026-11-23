@@ -235,3 +235,11 @@ table.lbt a{color:#1f5fd1; word-break:break-all}
 .lb-sig{display:grid; grid-template-columns:repeat(3,1fr); gap:30px; margin-top:38px; font-size:12px}
 .lb-sig div{border-top:1px solid #111; padding-top:4px; text-align:center} .lb-sig b{display:block; margin-top:-22px; margin-bottom:8px; min-height:14px} .lb-sig span{display:block}
 .lb-foot{display:flex; justify-content:space-between; font-size:10.5px; color:#777; margin-top:16px}
+/* Daily Report */
+.dr-sum{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px}
+.dr-sum div{border:1px solid #c6cfe0; padding:7px 11px; font-size:11px; color:#444} .dr-sum span{display:block} .dr-sum b{display:block; font-size:20px; color:#111; margin:1px 0} .dr-sum small{color:#555}
+.dr-sum div.u{border-color:#e7a1a1; background:#fff6f6} .dr-sum div.u b{color:#c62828}
+table.lbt tr.usec td{background:#fdecea; color:#c62828; font-weight:700; border-top:2px solid #c62828}
+table.lbt .urg{color:#c62828; font-weight:700}
+.mon-filters label.chk span:last-child{display:flex; gap:6px; align-items:center; font-weight:400; color:var(--ink); padding:8px 0}
+@media (max-width:800px){ .dr-sum{grid-template-columns:1fr 1fr} }

@@ -6,6 +6,7 @@ import { roleLine } from '../../js/views/admin.js';
 import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { download } from './export.js';
+import { dailyHtml, wireDaily } from './daily.js';
 import { foldersHtml, wireFolders, unfiledHtml, wireUnfiled, unfiledCount, locationHtml, wireLocation, storageHtml, wireStorage, locationOf, logbookHtml, wireLogbook } from './storage.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
 import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText, viewItem, isRepItem } from './receiving.js';
@@ -195,6 +196,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
   if (psaoOnly(refs)) return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
     { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
+    { key: 'daily', label: 'Daily Report', icon: 'overview', href: '#/rms/daily' },
     ...psao,
     ...storage,
     { section: true, label: 'SETUP' },
@@ -210,6 +212,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
     ...(psao.length ? [{ section: true, label: 'TEAM BOOKS' }] : []),
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
+    { key: 'daily', label: 'Daily Report', icon: 'overview', href: '#/rms/daily' },
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true },
     ...psao,
     ...storage,
@@ -231,7 +234,7 @@ export async function render(ctx) {
   if (['psao-in', 'psao-out'].includes(view) && !canPsao(refs)) view = 'overview';
   if (psaoOnly(refs) && ['receiving', 'outgoing', 'offices'].includes(view)) view = view === 'outgoing' ? 'psao-out' : view === 'offices' ? 'library' : 'psao-in';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook', daily: 'Daily Report' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
   const pendingN = (jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length) + waitingForMe(refs, rms).length;
   const body = view === 'receiving' ? receivingHtml(refs, rms, q).replace('id="rcv-new">+ Receive Documents</button></div>', (m) => m + fromPsaoHtml(refs, rms))
@@ -243,6 +246,7 @@ export async function render(ctx) {
     : view === 'location' ? locationHtml(refs, rms, q)
     : view === 'storage' ? storageHtml(refs, rms, q)
     : view === 'logbook' ? logbookHtml(refs, rms, q)
+    : view === 'daily' ? dailyHtml(refs, rms, q)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
@@ -263,6 +267,7 @@ export async function render(ctx) {
   else if (view === 'location') wireLocation(refs, rms, q, (id) => viewItem(refs, rms, id));
   else if (view === 'storage') wireStorage(refs, rms, q);
   else if (view === 'logbook') wireLogbook(refs, rms, q);
+  else if (view === 'daily') wireDaily(refs, rms, q);
 }
 
 /* ================= Overview ================= */
