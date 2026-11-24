@@ -185,12 +185,13 @@ function overdueAll(refs, rms, year) {
 
 /* ---------- page frame ---------- */
 function navItems(refs, overdueN, pendingN, awaitN, rms) {
-  const psao = canPsao(refs) ? [{ section: true, label: 'PSAO' },
+  const psao = canPsao(refs) ? [{ section: true, label: 'PSAO', fold: 'psao' },
     { key: 'psao-in', label: 'Incoming', icon: 'inbox', href: '#/rms/psao-in', count: routingCount(refs, rms) },
     { key: 'psao-out', label: 'Outgoing', icon: 'book', href: '#/rms/psao-out', count: psaoAwaiting(rms) }] : [];
   // Other Submission types with a gap check (e.g. AIR) get a number list.
-  const numLists = gapTypes(rms).map((t) => ({ key: 'numbers', label: t.code + ' List', icon: 'book', href: '#/rms/numbers?t=' + encodeURIComponent(t.code) }));
-  const storage = [{ section: true, label: 'RECORDS & STORAGE' },
+  // Daily Report and the number lists (e.g. AIR List) are on one Reports page.
+  const reports = { key: 'reports', label: 'Reports', icon: 'overview', href: '#/rms/reports' };
+  const storage = [{ section: true, label: 'RECORDS & STORAGE', fold: 'storage' },
     { key: 'folders', label: 'Folders', icon: 'folder', href: '#/rms/folders' },
     { key: 'unfiled', label: 'Not Yet Filed', icon: 'stack', href: '#/rms/unfiled', count: unfiledCount(refs, rms) },
     { key: 'location', label: 'Location', icon: 'pin', href: '#/rms/location' },
@@ -199,8 +200,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
   if (psaoOnly(refs)) return [
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
     { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
-    { key: 'daily', label: 'Daily Report', icon: 'overview', href: '#/rms/daily' },
-    ...numLists,
+    reports,
     ...psao,
     ...storage,
     { section: true, label: 'SETUP' },
@@ -208,7 +208,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
   if (jobOrderOnly(refs)) return [
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving' },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
-    ...numLists,
+    ...(gapTypes(rms).length ? [reports] : []),
     ...storage,
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true }];
   return [
@@ -217,8 +217,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
     ...(psao.length ? [{ section: true, label: 'TEAM BOOKS' }] : []),
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
-    { key: 'daily', label: 'Daily Report', icon: 'overview', href: '#/rms/daily' },
-    ...numLists,
+    reports,
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true },
     ...psao,
     ...storage,
@@ -236,11 +235,11 @@ export async function render(ctx) {
   if (view === 'setup') view = parts[1] === 'offices' ? 'offices' : 'library';
   if (view === 'incoming') view = 'receiving';
   const STORE_VIEWS = ['folders', 'unfiled', 'location', 'storage', 'logbook'];
-  if (jo && !['receiving', 'outgoing', 'numbers', ...STORE_VIEWS].includes(view)) view = 'receiving';
+  if (jo && !['receiving', 'outgoing', 'numbers', 'reports', ...STORE_VIEWS].includes(view)) view = 'receiving';
   if (['psao-in', 'psao-out'].includes(view) && !canPsao(refs)) view = 'overview';
   if (psaoOnly(refs) && ['receiving', 'outgoing', 'offices'].includes(view)) view = view === 'outgoing' ? 'psao-out' : view === 'offices' ? 'library' : 'psao-in';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook', daily: 'Daily Report', numbers: (gapTypes(rms).find((t) => t.code === q.get('t')) || gapTypes(rms)[0] || { code: 'Number' }).code + ' List' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook', reports: 'Reports', daily: 'Reports · Daily Report', numbers: 'Reports · ' + (gapTypes(rms).find((t) => t.code === q.get('t')) || gapTypes(rms)[0] || { code: 'Number' }).code + ' List' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
   const pendingN = (jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length) + waitingForMe(refs, rms).length;
   const body = view === 'receiving' ? receivingHtml(refs, rms, q).replace('id="rcv-new">+ Receive Documents</button></div>', (m) => m + fromPsaoHtml(refs, rms))
@@ -252,15 +251,16 @@ export async function render(ctx) {
     : view === 'location' ? locationHtml(refs, rms, q)
     : view === 'storage' ? storageHtml(refs, rms, q)
     : view === 'logbook' ? logbookHtml(refs, rms, q)
-    : view === 'daily' ? dailyHtml(refs, rms, q)
-    : view === 'numbers' ? numberListHtml(refs, rms, q)
+    : view === 'daily' ? '<a class="back-rep" href="#/rms/reports">‹ Reports</a>' + dailyHtml(refs, rms, q)
+    : view === 'numbers' ? '<a class="back-rep" href="#/rms/reports">‹ Reports</a>' + numberListHtml(refs, rms, q)
+    : view === 'reports' ? reportsHtml(refs, rms)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
     : overviewHtml(refs, rms, overdue);
   const me = refs.me ? refs.me.data : { name: ctx.session.name || ctx.session.email };
   const roleText = [refs.me?.data.position, roleLine(refs)].filter(Boolean).join(' · ');
-  app.innerHTML = moduleFrame({ title: 'Records<br>Management', items: navItems(refs, overdue.length, pendingN, awaitingCount(refs, rms), rms), active: view, crumb: crumbs[view] || 'Overview', me, roleText, body });
+  app.innerHTML = moduleFrame({ title: 'Records<br>Management', items: navItems(refs, overdue.length, pendingN, awaitingCount(refs, rms), rms), active: ['daily', 'numbers'].includes(view) ? 'reports' : view, crumb: crumbs[view] || 'Overview', me, roleText, body });
   $$('[data-soon]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); toast(`${a.dataset.soon} comes next. It is not built yet.`); }; });
   if (view === 'offices') wireOffices(refs, rms, q);
   else if (view === 'library') wireLibrary(refs, rms);
@@ -276,6 +276,15 @@ export async function render(ctx) {
   else if (view === 'logbook') wireLogbook(refs, rms, q);
   else if (view === 'daily') wireDaily(refs, rms, q);
   else if (view === 'numbers') wireNumberList(refs, rms, q);
+}
+
+/* ================= Reports (one page of cards) ================= */
+function reportsHtml(refs, rms) {
+  const cards = [...(jobOrderOnly(refs) ? [] : [{ href: '#/rms/daily', title: 'Daily Report', text: 'Everything received, day by day: reports, communications, other submissions' + (canPsao(refs) ? ' and the PSAO incoming' : '') + '. Urgent items first. Print, or download as PDF, Excel or Word.' }]),
+    ...gapTypes(rms).map((t) => ({ href: '#/rms/numbers?t=' + encodeURIComponent(t.code), title: t.code + ' List', text: `Every ${t.name} received, per office and sorted by number, with numbers not received flagged in red.` }))];
+  return `<div class="hello"><div><h1>Reports</h1><p>Lists and reports drawn from what the team has received.</p></div></div>
+    ${cards.length ? `<div class="rep-cards">${cards.map((c) => `<a class="rep-card" href="${c.href}"><b>${esc(c.title)}</b><span>${esc(c.text)}</span><i>Open ›</i></a>`).join('')}</div>`
+      : '<div class="empty"><b>No reports yet</b>A number list appears here once an Other Submission type has “Check for gaps” turned on.</div>'}`;
 }
 
 /* ================= Overview ================= */

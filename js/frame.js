@@ -32,6 +32,27 @@ export function syncBox(st = syncState) {
 window.addEventListener('sync-status', (e) => { const el = document.getElementById('syncbox'); if (el) el.outerHTML = syncBox(e.detail); });
 
 // items: [{ key, label, icon, href, soon?, count?, section? }]  (section: true → a heading row)
+// A section with fold: '<name>' folds: its heading opens or closes the items under it (remembered on this computer; open
+// while one of its pages is showing). The heading shows the total of its items' counts.
+const link = (it, active) => `<a href="${it.soon ? '#' : it.href}" class="${active === it.key ? 'on' : ''} ${it.soon ? 'soon' : ''}" ${it.soon ? `data-soon="${esc(it.label)}"` : ''}>${icon(it.icon)}<span>${esc(it.label)}</span>${it.count ? `<span class="cnt">${it.count}</span>` : ''}</a>`;
+function navHtml(items, active) {
+  let out = '';
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (!it.section) { out += link(it, active); continue; }
+    if (!it.fold) { out += `<div class="msec">${esc(it.label)}</div>`; continue; }
+    const kids = []; while (k + 1 < items.length && !items[k + 1].section) kids.push(items[++k]);
+    let saved = null; try { saved = localStorage.getItem('nav-fold-' + it.fold); } catch (e) { /* ignore */ }
+    const open = kids.some((x) => x.key === active) || saved === '1';
+    const n = kids.reduce((m, x) => m + (+x.count || 0), 0);
+    out += `<button type="button" class="msec mfold ${open ? 'open' : ''}" data-fold="${esc(it.fold)}" aria-expanded="${open}"><span>${esc(it.label)}</span>${n ? `<span class="cnt">${n}</span>` : ''}<i>›</i></button>
+      <div class="mfold-items" ${open ? '' : 'hidden'}>${kids.map((x) => link(x, active)).join('')}</div>`;
+  }
+  return out;
+}
+if (!window.__navFold) { window.__navFold = true; document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-fold]'); if (!b) return;
+  const box = b.nextElementSibling, open = box.hidden; box.hidden = !open; b.classList.toggle('open', open); b.setAttribute('aria-expanded', open);
+  try { localStorage.setItem('nav-fold-' + b.dataset.fold, open ? '1' : '0'); } catch (err) { /* ignore */ } }); }
 export function moduleFrame({ title, items, active, crumb, me, roleText, body }) {
   const name = me ? me.name : '';
   const ini = String(name).split(/\s+/).filter((w) => /^[A-Z]/i.test(w)).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
@@ -39,8 +60,7 @@ export function moduleFrame({ title, items, active, crumb, me, roleText, body })
     <aside class="mside">
       <div class="mbrand"><img src="img/coa-logo.png" alt="COA seal"><div><b>${title}</b><small>AMS · COA Quirino</small></div></div>
       <a class="mhome" href="#/">← AMS Dashboard</a>
-      <nav class="mnav">${items.map((it) => it.section ? `<div class="msec">${esc(it.label)}</div>`
-        : `<a href="${it.soon ? '#' : it.href}" class="${active === it.key ? 'on' : ''} ${it.soon ? 'soon' : ''}" ${it.soon ? `data-soon="${esc(it.label)}"` : ''}>${icon(it.icon)}<span>${esc(it.label)}</span>${it.count ? `<span class="cnt">${it.count}</span>` : ''}</a>`).join('')}</nav>
+      <nav class="mnav">${navHtml(items, active)}</nav>
       ${syncBox()}
     </aside>
     <div class="mmain">

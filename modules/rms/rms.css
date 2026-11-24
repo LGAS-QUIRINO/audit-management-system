@@ -263,3 +263,8 @@ table.or-tab td .input{min-width:110px;width:100%;padding:6px 8px} table.or-tab 
 table.lbt td.num{text-align:right;white-space:nowrap}
 table.lbt tr.usec.gapr td{background:#fff5f5;font-weight:600;border-top:1px solid #f3b4b4}
 #f-orows{margin-top:10px}
+.rep-cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px}
+.rep-card{display:flex; flex-direction:column; gap:8px; background:#fff; border:1px solid var(--line,#dfe5f1); border-radius:14px; padding:18px 20px; text-decoration:none; color:inherit; transition:box-shadow .15s, border-color .15s}
+.rep-card:hover{border-color:#9db4e6; box-shadow:0 6px 20px rgba(11,42,107,.08)}
+.rep-card b{font-size:17px; color:#0b2a6b} .rep-card span{font-size:13.5px; color:#5b6785; line-height:1.5} .rep-card i{margin-top:auto; font-style:normal; font-weight:600; color:#1f5fd1; font-size:13px}
+.back-rep{display:inline-block; font-size:13px; color:#1f5fd1; text-decoration:none; margin-bottom:6px} .back-rep:hover{text-decoration:underline}
