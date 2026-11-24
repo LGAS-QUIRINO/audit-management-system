@@ -243,3 +243,23 @@ table.lbt tr.usec td{background:#fdecea; color:#c62828; font-weight:700; border-
 table.lbt .urg{color:#c62828; font-weight:700}
 .mon-filters label.chk span:last-child{display:flex; gap:6px; align-items:center; font-weight:400; color:var(--ink); padding:8px 0}
 @media (max-width:800px){ .dr-sum{grid-template-columns:1fr 1fr} }
+/* Other submissions: checklist, bulk rows, number list (24 Nov 2026) */
+.pill.ot-set{border:0;cursor:pointer;font:inherit;font-size:12px} .pill.ot-set:hover{filter:brightness(.95);text-decoration:underline}
+.or-wrap{overflow-x:auto;border:1px solid var(--line,#dfe5f1);border-radius:10px;margin-top:6px}
+table.or-tab{border-collapse:collapse;width:100%;font-size:13px}
+table.or-tab th{background:#f6f8fc;color:#5b6785;font-size:11px;letter-spacing:.5px;text-transform:uppercase;text-align:left;padding:7px 8px;white-space:nowrap} table.or-tab th.r{text-align:right}
+table.or-tab td{border-top:1px solid var(--line,#dfe5f1);padding:6px 8px;vertical-align:middle}
+table.or-tab td .input{min-width:110px;width:100%;padding:6px 8px} table.or-tab td .input.amt{text-align:right;min-width:100px} table.or-tab td .input[type=date]{min-width:135px}
+.or-att{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12.5px} .or-att label{display:inline-flex;gap:4px;align-items:center;white-space:nowrap}
+.or-foot{display:flex;gap:8px;align-items:center;margin-top:8px}
+.or-warn{background:#fff4d6;border:1px solid #f1d78b;color:#8a6500;border-radius:10px;padding:8px 12px;font-size:12.5px;margin-top:8px}
+.or-warn[hidden]{display:none}
+.aa-doc{border:1px solid var(--line,#dfe5f1);border-radius:10px;padding:8px 12px;margin-bottom:8px} .aa-doc .rcv-items{margin-top:6px}
+.rcv-items label.done{color:#5b6785}
+.nl-tabs{display:flex;gap:6px;flex-wrap:wrap;padding:12px 18px 0}
+.nl-tabs a{padding:6px 12px;border-radius:20px;font-size:12.5px;color:#5b6785;text-decoration:none;border:1px solid var(--line,#dfe5f1);background:#fff}
+.nl-tabs a.on{background:#0b2a6b;color:#fff;border-color:#0b2a6b;font-weight:600}
+.nl-tabs a i{font-style:normal;background:#c62828;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:5px}
+table.lbt td.num{text-align:right;white-space:nowrap}
+table.lbt tr.usec.gapr td{background:#fff5f5;font-weight:600;border-top:1px solid #f3b4b4}
+#f-orows{margin-top:10px}

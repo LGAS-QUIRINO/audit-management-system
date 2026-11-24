@@ -9,6 +9,7 @@ import { pdfToLines, parseDetails } from './pdfread.js';
 import { DEMO } from '../../js/config.js';
 import { syncNow } from '../../js/sync.js';
 import { locationOf } from './storage.js';
+import { otherIncomplete, isBulkRec, attachTicksHtml, readTicks, rowsEditor, bulkSubject, bulkNote, typeOf, attachOf, addAttachment, particularsLines, docLine, missingOf, incompleteDocs, docsTotal } from './othersub.js';
 import { scopesFor, visibleOffices, periodsOf, periodLabel, dueDate, span, fmtDT, fmtDate, jobOrderOnly, hasRole, byAnnual } from './rms.js';
 
 const by = (refs) => refs.me?.data.email || '';
@@ -236,7 +237,8 @@ export function periodsText(list) {
 }
 
 export function statusText(i) {
-  if (i.kind === 'comm' || i.kind === 'psao-in' || i.kind === 'other') return 'Received';
+  if (i.kind === 'other') return otherIncomplete(i) ? 'Incomplete' : 'Received';
+  if (i.kind === 'comm' || i.kind === 'psao-in') return 'Received';
   if (isVerify(i)) return 'For Verification';
   if (i.status === 'rejected') return 'Rejected';
   if (isAccepted(i)) return 'Accepted';
@@ -341,7 +343,9 @@ const ordinal = (n) => ORD[n - 1] || n + 'th';
 export function historyOf(i) {
   const ck = i.checklist || [], total = ck.length;
   const ev = [];
-  if (i.kind === 'comm' || i.kind === 'other') { const n = laterNote(i.receivedAt, i.encodedAt, i.receivedByName); return [{ at: i.receivedAt, text: 'Received' + (n ? ' (' + n + ')' : ''), who: n ? '' : i.receivedByName }]; }
+  if (i.kind === 'comm' || i.kind === 'other') { const n = laterNote(i.receivedAt, i.encodedAt, i.receivedByName);
+    return [{ at: i.receivedAt, text: 'Received' + (n ? ' (' + n + ')' : ''), who: n ? '' : i.receivedByName },
+      ...(i.attachLog || []).map((x) => ({ at: x.at, text: 'Attachment received: ' + x.items.join('; '), who: x.byName }))]; }
   let have = ck.filter((c) => c.ok && !c.late).length;
   // Per account (e.g. BRS): after each submission, how many accounts are complete.
   const grp = isGrouped(ck), lbl = ((i.lineLabel || 'account') + 's').toLowerCase(), inSoFar = new Set(ck.map((c, k) => ((c.ok && !c.late) || c.na ? k : -1)).filter((k) => k >= 0));
@@ -396,13 +400,15 @@ export function receivingHtml(refs, rms, q) {
     const agg = periodOf(rms, i); if (!agg.done) lacking.push({ k, i: agg.recs[agg.recs.length - 1], agg });
   });
   lacking.sort((a, b) => String(b.i.period).localeCompare(String(a.i.period)));
+  // Other submissions still missing a required attachment.
+  const otherInc = mine.filter((i) => i.kind === 'other' && inGroup(i) && otherIncomplete(i)).sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
   const doneTxt = (agg) => { if (isGrouped(agg.checklist)) { const t = lineTally(agg.checklist); return `${t.done.length} of ${t.total} ${esc(((agg.lineLabel || 'account') + 's').toLowerCase())} complete`; }
     return `${agg.checklist.filter(isIn).length} of ${agg.checklist.length} submitted`; };
   const inTx = (i) => { if (isGrouped(i.checklist)) { const n = linesOf(i.checklist).filter(([, es]) => es.some((e) => e.ok || e.na)).length; return `${n} ${esc(((i.lineLabel || 'account') + (n === 1 ? '' : 's')).toLowerCase())} in this transmittal`; }
     return `${(i.checklist || []).filter((c) => c.ok).length} document(s) in this transmittal`; };
   const off = (id) => offs.find((o) => o.id === id);
   const rep = (id) => rms.reports.find((r) => r.id === id);
-  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : i.kind === 'other' ? esc((i.docKind || i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '')) : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
+  const what = (i) => i.kind === 'comm' ? 'Communication · ' + esc(i.subject || '') : i.kind === 'other' ? esc((i.docKind || i.docTypeName || i.reportCode || '') + ' · ' + (i.subject || '') + (bulkNote(i) ? ' · ' + bulkNote(i) : '')) : esc((rep(i.reportId)?.code || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) : periodLabel(i.period)));
   const cols = 'grid-template-columns:minmax(190px,1.2fr) minmax(170px,1fr) 120px 220px 170px';
   const row = (i, acts) => `<div class="t-row" style="${cols}"><span class="mono"><b>${esc(numberOf(i))}</b>${i._new ? '<br><small class="warn-t">not yet confirmed</small>' : ''}</span>
     <span>${esc(i.kind === 'comm' && !i.officeId ? i.fromOutside : off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span>
@@ -422,12 +428,17 @@ export function receivingHtml(refs, rms, q) {
       ${lacking.map(({ k, i, agg }) => `<div class="t-row" style="${cols}"><span class="mono">${agg.recs.map((r) => `<b>${esc(numberOf(r))}</b>`).join('<br>')}</span>
         <span>${esc(off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span><span><small>${esc(fmtDate(i.receivedAt))}</small></span><span><small>${doneTxt(agg)}</small></span>
         <span class="acts"><button class="btn sm primary" data-next="${esc(k)}">Receive Next Transmittal</button></span></div>`).join('')}</section>` : ''}
+    ${otherInc.length ? `<section class="panel"><div class="panel-head"><h2>Other Submissions Still Incomplete · ${otherInc.length}</h2></div>
+      <div class="t-head" style="${cols}"><span>Tracking No.</span><span>Office · Document</span><span>Received</span><span>Missing</span><span></span></div>
+      ${otherInc.map((i) => `<div class="t-row" style="${cols}"><span class="mono"><b>${esc(numberOf(i))}</b></span><span>${esc(off(i.officeId)?.label || '')}<br><small>${what(i)}</small></span>
+        <span><small>${esc(fmtDate(i.receivedAt))}</small></span><span><small>${incompleteDocs(i).map((d) => esc((isBulkRec(i) ? docLine(i, d) + ': ' : '') + missingOf(d.attach || i.attach).join(', '))).join('<br>')}</small></span>
+        <span class="acts"><button class="btn sm primary" data-att="${i.id}">Add Attachment</button></span></div>`).join('')}</section>` : ''}
     <section class="panel" id="all-tx"><div class="panel-head"><h2>${jo ? 'Received by You' : 'All Transmittals'} · ${recent.length}</h2>
         ${recent.length ? `<span class="r"><label class="sr-only" for="rcv-find">Search transmittals</label><input class="input" id="rcv-find" placeholder="Search: tracking no., office, report, month, name" style="width:340px"></span>` : ''}</div>
       ${recent.length ? `<div class="t-head" style="${cols}"><span>Tracking No.</span><span>Office · Item</span><span>Received</span><span>Status</span><span></span></div>
         <div id="tx-list">${recent.map((i, n) => { const r0 = rms.reports.find((x) => x.id === i.reportId);
-          const find = [numberOf(i), off(i.officeId)?.label, i.fromOutside, i.reportCode, r0 && r0.name, ...(i.batchId ? batchOf(rms, i).map((x) => periodLabel(x.period)) : [i.period && periodLabel(i.period)]), i.subject, i.submittedBy, i.receivedByName, fmtDate(i.receivedAt), statusText(i)].filter(Boolean).join(' ').toLowerCase();
-          return row(i, `<button class="btn sm" data-view="${i.id}">View</button>${i._new ? '' : `<button class="btn sm" data-slip="${i.id}">Slip</button>`}${canCorrect(refs) && !i._new ? `<button class="btn sm" data-fix="${i.id}">Correct</button>` : ''}`)
+          const find = [numberOf(i), off(i.officeId)?.label, i.fromOutside, i.reportCode, r0 && r0.name, ...(i.batchId ? batchOf(rms, i).map((x) => periodLabel(x.period)) : [i.period && periodLabel(i.period)]), i.subject, ...(isBulkRec(i) ? i.docs.map((d) => docLine(i, d)) : []), i.submittedBy, i.receivedByName, fmtDate(i.receivedAt), statusText(i)].filter(Boolean).join(' ').toLowerCase();
+          return row(i, `<button class="btn sm" data-view="${i.id}">View</button>${i._new ? '' : `<button class="btn sm" data-slip="${i.id}">Slip</button>`}${i.kind === 'other' && !i._new && (isBulkRec(i) || i.attach || (typeOf(rms, i)?.checklist || []).length) ? `<button class="btn sm" data-att="${i.id}">Attachments</button>` : ''}${canCorrect(refs) && !i._new ? `<button class="btn sm" data-fix="${i.id}">Correct</button>` : ''}`)
             .replace('<div class="t-row"', `<div class="t-row${n >= 50 ? ' more' : ''}" data-find="${esc(find)}"${n >= 50 ? ' hidden' : ''}`); }).join('')}</div>
         <p class="empty" id="tx-none" hidden>No transmittal matches the search.</p>
         ${recent.length > 50 ? `<div class="note"><button class="btn sm" id="tx-more">Show all ${recent.length}</button></div>` : ''}`
@@ -447,6 +458,7 @@ export function wireReceiving(refs, rms, q, rerender) {
   $$('[data-next]').forEach((b) => { const [officeId, reportId, period] = b.dataset.next.split('|'); b.onclick = () => receiveForm(refs, rms, { officeId, reportId, period }); });
   $$('[data-view]').forEach((b) => { b.onclick = () => viewItem(refs, rms, b.dataset.view); });
   $$('[data-fix]').forEach((b) => { b.onclick = () => correctItem(refs, rms, b.dataset.fix); });
+  $$('[data-att]').forEach((b) => { b.onclick = () => addAttachment(refs, rms, b.dataset.att); });
   $$('[data-slip]').forEach((b) => { b.onclick = () => printSlip(refs, rms, rms.items.find((i) => i.id === b.dataset.slip)); });
   if (q.get('new') === '1') { history.replaceState(null, '', '#/rms/receiving'); receiveForm(refs, rms); }
   fixStaleNumbers(refs, rms).catch(() => {});
@@ -488,11 +500,13 @@ async function receiveForm(refs, rms, preset = null) {
         <div class="two"><div class="field"><label for="f-otype">Document type</label><select class="input" id="f-otype">${(rms.otherTypes || []).map((t) => `<option value="${esc(t.code)}">${esc(t.name)} (${esc(t.code)})</option>`).join('')}</select>
             <span class="hint" id="f-ono"></span></div>
           <div class="field" id="f-okind-box" hidden><label for="f-okind">Kind</label><select class="input" id="f-okind"></select></div></div>
-        <div class="two">
+        <div id="f-osingle"><div class="two">
           <div class="field"><label for="f-otitle">Title / description</label><input class="input" id="f-otitle" placeholder="e.g. MOA between PGQ and DPWH on the farm-to-market road"></div><div></div></div>
         <div class="two"><div class="field"><label for="f-odoc">Document no. (optional)</label><input class="input" id="f-odoc" placeholder="e.g. MOA No. 12, s. 2026"></div>
           <div class="field"><label for="f-odate">Document date (optional)</label><input class="input" type="date" id="f-odate"></div></div>
         <div class="field" style="max-width:220px"><label for="f-opages">Pages / Attachments (optional)</label><input class="input" id="f-opages" placeholder="e.g. 6 pages"></div>
+        <div id="f-oatt"></div></div>
+        <div id="f-orows" hidden></div>
       </div>
       <div id="comm-part" hidden>
 
@@ -692,7 +706,12 @@ async function receiveForm(refs, rms, preset = null) {
       // Kinds of a type (e.g. Agreements and Contracts: MOA, MOU, Contract of Commodatum…).
       const otherKinds = () => { const t = (rms.otherTypes || []).find((x) => x.code === $('#f-otype', bg).value), ks = (t && t.kinds) || [];
         $('#f-okind-box', bg).hidden = !ks.length; $('#f-okind', bg).innerHTML = ks.map((k) => `<option>${esc(k)}</option>`).join(''); };
-      $('#f-otype', bg).onchange = () => { otherKinds(); otherNo(); }; otherKinds();
+      // Checklist of attachments; a Bulk type gets one row per document instead of the single-document fields.
+      const otherForm = () => { const t = (rms.otherTypes || []).find((x) => x.code === $('#f-otype', bg).value), bulk = !!(t && t.bulk);
+        $('#f-osingle', bg).hidden = bulk; $('#f-orows', bg).hidden = !bulk;
+        $('#f-oatt', bg).innerHTML = t && !bulk ? attachTicksHtml(t) : '';
+        bg._orows = bulk ? rowsEditor($('#f-orows', bg), t, t.fields) : null; };
+      $('#f-otype', bg).onchange = () => { otherKinds(); otherForm(); otherNo(); }; otherKinds(); otherForm();
       $$('input[name=kind]', bg).forEach((x) => { x.onchange = kindState; });
       $('#f-outside', bg).onchange = () => { const o = $('#f-outside', bg).checked; $('#f-outside-box', bg).hidden = !o; $('#f-mun', bg).disabled = o; $('#f-off', bg).disabled = o; };
       // Open on the municipality used last, or else the first one with offices ready to receive.
@@ -810,11 +829,14 @@ async function receiveForm(refs, rms, preset = null) {
       } else if (kind === 'other') {
         const t = (rms.otherTypes || []).find((x) => x.code === $('#f-otype', bg).value);
         if (!t) { toast('Choose the document type (Report Library → Other Submission Types).', 'bad'); return false; }
-        const title = $('#f-otitle', bg).value.trim(); if (!title) { toast('Enter the title or a short description.', 'bad'); return false; }
+        let one = null;
+        if (t.bulk) { const r = bg._orows.get(when.iso); if (r.err) { toast(r.err, 'bad'); return false; } one = { docFields: bg._orows.fields, docs: r.docs, subject: bulkSubject(t, bg._orows.fields, r.docs), docNo: '', docDate: '', pages: '' }; }
+        else { const title = $('#f-otitle', bg).value.trim(); if (!title) { toast('Enter the title or a short description.', 'bad'); return false; }
+          one = { subject: title, docNo: $('#f-odoc', bg).value.trim(), docDate: $('#f-odate', bg).value, pages: $('#f-opages', bg).value.trim(), ...((t.checklist || []).length ? { attach: readTicks(bg, t, when.iso) } : {}) }; }
         const year = new Date(when.iso).getFullYear(), key = o.id + '|o:' + t.code, start = +((t.starts || {})[year] || 0);
         const n = Math.max(start - 1, 0, ...rms.items.filter((i) => i.seriesKey === key && i.trackingYear === year).map((i) => i.series || 0)) + 1;
-        out = { ...base, kind: 'other', docType: t.code, docTypeName: t.name, ...((t.kinds || []).length ? { docKind: $('#f-okind', bg).value } : {}), reportCode: t.code, subject: title, docNo: $('#f-odoc', bg).value.trim(), docDate: $('#f-odate', bg).value,
-          pages: $('#f-opages', bg).value.trim(), status: 'received', trackingNo: `${o.code}-${t.code}-${year}-${String(n).padStart(4, '0')}`, series: n, trackingYear: year, seriesKey: key };
+        out = { ...base, kind: 'other', docType: t.code, docTypeName: t.name, ...((t.kinds || []).length ? { docKind: $('#f-okind', bg).value } : {}), reportCode: t.code, ...one,
+          status: 'received', trackingNo: `${o.code}-${t.code}-${year}-${String(n).padStart(4, '0')}`, series: n, trackingYear: year, seriesKey: key };
       } else {
         const subject = $('#f-subj', bg).value.trim();
         if (!subject) { toast('Enter the subject or a short description.', 'bad'); return false; }
@@ -979,12 +1001,15 @@ async function addLate(refs, rms, id) {
 }
 
 /* ---------- view one item ---------- */
+const particulars1 = (att) => { const ok = att.filter((a) => a.ok).map((a) => a.item), miss = missingOf(att); return (ok.length ? ok.join(', ') : 'none') + (miss.length ? ' · missing: ' + miss.join(', ') : ''); };
 export async function viewItem(refs, rms, id) {
   const i = rms.items.find((x) => x.id === id);
   const off = visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).find((o) => o.id === i.officeId);
   const row = (k, v) => `<div class="kvrow"><small>${k}</small><span>${v}</span></div>`;
   modal({ title: numberOf(i), body: `${row('Status', statusPill(i))}${row('Office', esc(i.fromOutside || off?.label || ''))}
     ${i.kind === 'other' ? row('Document', esc((i.docKind || i.docTypeName || i.reportCode) + ' · ' + i.subject) + (i.docNo || i.docDate ? `<br><small>${esc([i.docNo, i.docDate && fmtDate(i.docDate)].filter(Boolean).join(' · '))}</small>` : '')) + (i.pages ? row('Pages', esc(i.pages)) : '')
+        + (isBulkRec(i) ? row(`${esc(i.reportCode)}s (${i.docs.length})`, `<ul class="rcv-ck">${i.docs.map((d) => `<li class="${missingOf(d.attach).length ? 'miss' : 'ok'}">${esc(docLine(i, d, true))}${(d.attach || []).length ? `<br><small>${esc(particulars1(d.attach))}</small>` : ''}</li>`).join('')}</ul>${docsTotal(i) != null ? `<small>Total: ₱${esc(docsTotal(i).toLocaleString('en-US', { minimumFractionDigits: 2 }))}</small>` : ''}`)
+          : i.attach ? row('Attachments', `<ul class="rcv-ck">${i.attach.map((a) => `<li class="${a.ok ? 'ok' : a.opt ? '' : 'miss'}">${esc(a.item)}${a.opt ? ' <small>(optional)</small>' : ''}${a.ok && a.at && a.at !== i.receivedAt ? ` <small>· ${esc(fmtDate(a.at))}</small>` : ''}</li>`).join('')}</ul>`) : '')
       : i.kind === 'comm' ? row('Subject', esc(i.subject)) + (i.pages ? row('Pages', esc(i.pages)) : '') : row('Report', esc(i.reportCode + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) + ' (' + batchOf(rms, i).length + ' periods, one tracking number)' : periodLabel(i.period))))}
     ${row('Received', esc(fmtDate(i.receivedAt) + ', ' + new Date(i.receivedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) + ' by ' + esc(i.receivedByName)
       + (encodedLater(i) ? `<br><small>Encoded later: ${esc(fmtDT(i.encodedAt))}</small>` : ''))}
@@ -995,8 +1020,9 @@ export async function viewItem(refs, rms, id) {
       : i.checklist ? row('This transmittal', transmittalHtml(i, periodOf({ ...rms, items: [...rms.items.filter((x) => x.id !== i.id), i] }, i))) : ''}
     ${row('History', historyHtml(i))}
     ${i.remarks ? row('Remarks', esc(i.remarks)) : ''}`,
-    buttons: [{ label: 'Close', value: null, cls: canCorrect(refs) && !i._new ? '' : 'primary' }, ...(canCombine(refs) ? [{ label: 'Delete…', value: 'del' }] : []), ...(canCorrect(refs) && !i._new ? [{ label: 'Correct', cls: 'primary', value: 'fix' }] : [])] })
-    .then((v) => { if (v === 'fix') correctItem(refs, rms, id); if (v === 'del') deleteItem(refs, rms, id); });
+    buttons: [{ label: 'Close', value: null, cls: canCorrect(refs) && !i._new ? '' : 'primary' }, ...(canCombine(refs) ? [{ label: 'Delete…', value: 'del' }] : []),
+      ...(i.kind === 'other' && !i._new && (isBulkRec(i) || i.attach || (typeOf(rms, i)?.checklist || []).length) ? [{ label: 'Add Attachment', value: 'att' }] : []), ...(canCorrect(refs) && !i._new ? [{ label: 'Correct', cls: 'primary', value: 'fix' }] : [])] })
+    .then((v) => { if (v === 'fix') correctItem(refs, rms, id); if (v === 'del') deleteItem(refs, rms, id); if (v === 'att') addAttachment(refs, rms, id); });
 }
 
 /* ---------- combining records of the same period (Admin only) ---------- */
@@ -1063,14 +1089,16 @@ async function correctItem(refs, rms, id) {
         <select class="input" id="c-batch">${batch.map((x) => `<option value="${x.id}" ${x.id === i.id ? 'selected' : ''}>${esc(periodLabel(x.period))}</option>`).join('')}</select></div>` : ''}
       <div class="two"><div class="field"><label for="c-date">Date received</label><input class="input" type="datetime-local" id="c-date" value="${localInput(i.receivedAt)}" max="${localInput(new Date())}"></div>
         ${isRep ? `<div class="field"><label for="c-per">Period</label><select class="input" id="c-per">${periods.map((p) => `<option value="${p}" ${p === i.period ? 'selected' : ''}>${esc(periodLabel(p))}</option>`).join('')}</select></div>`
-          : `<div class="field"><label for="c-subj">${i.kind === 'other' ? 'Title / description' : 'Subject'}</label><input class="input" id="c-subj" value="${esc(i.subject || '')}"></div>`}</div>
+          : isBulkRec(i) ? `<input type="hidden" id="c-subj" value="${esc(i.subject || '')}"><div></div>` : `<div class="field"><label for="c-subj">${i.kind === 'other' ? 'Title / description' : 'Subject'}</label><input class="input" id="c-subj" value="${esc(i.subject || '')}"></div>`}</div>
       ${i.kind === 'other' ? (() => { const types = rms.otherTypes || [], cur = types.find((t) => t.code === i.reportCode);
-        return `<div class="two"><div class="field"><label for="c-otype">Document type</label><select class="input" id="c-otype">${types.map((t) => `<option value="${esc(t.code)}" ${t.code === i.reportCode ? 'selected' : ''}>${esc(t.name)} (${esc(t.code)})</option>`).join('')}</select>
-            <span class="hint">A different type gives it a new number in that type's series.</span></div>
+        const bulk = isBulkRec(i), tl = bulk ? types.filter((t) => t.code === i.reportCode) : types;
+        return `<div class="two"><div class="field"><label for="c-otype">Document type</label><select class="input" id="c-otype" ${bulk ? 'disabled' : ''}>${(tl.length ? tl : [{ code: i.reportCode, name: i.docTypeName || i.reportCode }]).map((t) => `<option value="${esc(t.code)}" ${t.code === i.reportCode ? 'selected' : ''}>${esc(t.name)} (${esc(t.code)})</option>`).join('')}</select>
+            <span class="hint">${bulk ? 'A transmittal of several documents keeps its type.' : "A different type gives it a new number in that type's series."}</span></div>
           <div class="field" id="c-okind-box" ${(cur?.kinds || []).length ? '' : 'hidden'}><label for="c-okind">Kind</label><select class="input" id="c-okind">${(cur?.kinds || []).map((k) => `<option ${k === i.docKind ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select></div></div>
-        <div class="two"><div class="field"><label for="c-odoc">Document no.</label><input class="input" id="c-odoc" value="${esc(i.docNo || '')}"></div>
+        ${bulk ? '<div id="c-orows"></div>' : `<div class="two"><div class="field"><label for="c-odoc">Document no.</label><input class="input" id="c-odoc" value="${esc(i.docNo || '')}"></div>
           <div class="field"><label for="c-odate">Document date</label><input class="input" type="date" id="c-odate" value="${esc(i.docDate || '')}"></div></div>
-        <div class="field" style="max-width:220px"><label for="c-opages">Pages / Attachments</label><input class="input" id="c-opages" value="${esc(i.pages || '')}"></div>`; })() : ''}
+        <div class="field" style="max-width:220px"><label for="c-opages">Pages / Attachments</label><input class="input" id="c-opages" value="${esc(i.pages || '')}"></div>
+        ${i.attach ? `<div id="c-oatt">${attachTicksHtml(cur, i.attach)}</div>` : ''}`}`; })() : ''}
       ${isRep && isGrouped(ck) ? `<div><span class="legend">Checklist per ${esc((i.lineLabel || 'account').toLowerCase())} · tick what was actually submitted</span>
         <div class="rcv-list">${linesOf(ck).length > 8 ? '<input class="input" id="c-find" placeholder="Search">' : ''}
           <div class="acc-list">${accordionHtml(ck, { name: 'cfix' })}</div>
@@ -1085,6 +1113,7 @@ async function correctItem(refs, rms, id) {
       <div class="field"><label for="c-rem">Remarks</label><input class="input" id="c-rem" value="${esc(i.remarks || '')}"></div>
       <div class="field"><label for="c-why">Reason for the correction (required)</label><input class="input" id="c-why" placeholder="e.g. Encoder ticked GF-1234 by mistake; not in the bundle"></div>`,
     onOpen: (bg) => {
+      if ($('#c-orows', bg)) bg._crows = rowsEditor($('#c-orows', bg), typeOf(rms, i) || { code: i.reportCode, checklist: [] }, i.docFields, i.docs);
       if ($('#c-batch', bg)) $('#c-batch', bg).onchange = () => { switchTo = $('#c-batch', bg).value; $('.mf .btn', bg).click(); };
       if ($('#c-otype', bg)) $('#c-otype', bg).onchange = () => { const t = (rms.otherTypes || []).find((x) => x.code === $('#c-otype', bg).value), ks = (t && t.kinds) || [];
         $('#c-okind-box', bg).hidden = !ks.length; $('#c-okind', bg).innerHTML = ks.map((k) => `<option>${esc(k)}</option>`).join(''); };
@@ -1133,10 +1162,16 @@ async function correctItem(refs, rms, id) {
           if (t && t.code !== i.reportCode) { changes.push(`document type ${i.docTypeName || i.reportCode} → ${t.name}`); Object.assign(patch, { reportCode: t.code, docType: t.code, docTypeName: t.name }); }
           const kind = t && (t.kinds || []).length ? $('#c-okind', bg).value : '';
           if ((kind || '') !== (i.docKind || '')) { changes.push(`kind ${i.docKind || '—'} → ${kind || '—'}`); patch.docKind = kind; }
-          const dn = $('#c-odoc', bg).value.trim(), dd = $('#c-odate', bg).value, pg = $('#c-opages', bg).value.trim();
-          if (dn !== (i.docNo || '')) { changes.push('document no.'); patch.docNo = dn; }
-          if (dd !== (i.docDate || '')) { changes.push('document date'); patch.docDate = dd; }
-          if (pg !== (i.pages || '')) { changes.push('pages'); patch.pages = pg; }
+          if (bg._crows) {
+            const r2 = bg._crows.get(recAt); if (r2.err) { toast(r2.err, 'bad'); return false; }
+            if (JSON.stringify(r2.docs) !== JSON.stringify(i.docs)) { changes.push(`${i.reportCode}s in the transmittal`); patch.docs = r2.docs; patch.subject = bulkSubject(typeOf(rms, i) || { code: i.reportCode }, i.docFields, r2.docs); }
+          } else {
+            const dn = $('#c-odoc', bg).value.trim(), dd = $('#c-odate', bg).value, pg = $('#c-opages', bg).value.trim();
+            if (dn !== (i.docNo || '')) { changes.push('document no.'); patch.docNo = dn; }
+            if (dd !== (i.docDate || '')) { changes.push('document date'); patch.docDate = dd; }
+            if (pg !== (i.pages || '')) { changes.push('pages'); patch.pages = pg; }
+            if ($('#c-oatt', bg)) { const na = readTicks(bg, null, recAt, i.attach); if (JSON.stringify(na) !== JSON.stringify(i.attach)) { changes.push('attachments'); patch.attach = na; } }
+          }
         }
       }
       const sb = $('#c-by', bg).value.trim(), sd = $('#c-des', bg).value.trim(), rem = $('#c-rem', bg).value.trim();
@@ -1326,7 +1361,7 @@ export function printSlip(refs, rms, i) {
     <div class="title">ACKNOWLEDGMENT RECEIPT</div>
     <div class="no"><small>${pend ? 'PENDING CODE' : 'TRACKING NUMBER'}</small><b>${esc(numberOf(i))}</b></div>
     <div class="kv"><span>${i.fromOutside ? 'From' : 'Office'}</span><span><b>${esc(i.fromOutside || off?.label || '')}</b></span>
-      ${i.kind === 'other' ? `<span>Document</span><span>${esc((i.docKind || i.docTypeName || i.reportCode) + ' · ' + i.subject)}${i.docNo ? ' · ' + esc(i.docNo) : ''}${i.pages ? ' · ' + esc(i.pages) : ''}</span>`
+      ${i.kind === 'other' ? `<span>Document</span><span>${esc((i.docKind || i.docTypeName || i.reportCode) + (isBulkRec(i) ? ' · ' + i.docs.length + ' ' + i.reportCode + (i.docs.length === 1 ? '' : 's') : ' · ' + i.subject))}${i.docNo ? ' · ' + esc(i.docNo) : ''}${i.pages ? ' · ' + esc(i.pages) : ''}</span>`
         : i.kind === 'comm' || i.kind === 'psao-in' ? `<span>Subject</span><span>${esc(i.subject)}${i.pages ? ' · ' + esc(i.pages) : ''}</span>` : `<span>Report</span><span>${esc((rep?.name || i.reportCode) + ' · ' + (many ? periodsText(batch.map((x) => x.period)) + ' (' + batch.length + ' periods)' : periodLabel(i.period)))}</span>`}
       <span>Received</span><span>${esc(new Date(i.receivedAt).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }))}</span>
       <span>Received from</span><span>${esc(i.submittedBy)}${i.submittedDesignation ? ', ' + esc(i.submittedDesignation) : ''}</span></div>
@@ -1334,6 +1369,7 @@ export function printSlip(refs, rms, i) {
       ${ver ? `<div class="note">Received subject to verification by the Auditor.${anyMiss ? ' Please submit the missing documents.' : ''}</div>`
         : anyMiss && i.status !== 'rejected' ? `<div class="note">Please submit the missing documents.</div>` : ''}
       ${i.status === 'rejected' && i.decision?.remarks ? `<div class="note">Rejected: ${esc(i.decision.remarks)}</div>` : ''}` : ''}
+    ${i.kind === 'other' && (isBulkRec(i) || i.attach) ? `<ul>${particularsLines(i).map((l) => `<li class="${l.miss ? 'miss' : 'ok'}">${esc(l.text)}</li>`).join('')}</ul>${otherIncomplete(i) ? '<div class="note">Please submit the missing attachments.</div>' : ''}` : ''}
     <div class="foot"><span>Status: <b>${esc(statusText(i))}</b></span><div class="sig"><b>${esc(i.receivedByName)}</b><br>Received by</div></div>
     </div><script>window.onload=()=>{window.focus();window.print();}<\/script></body></html>`;
   const w = window.open('', '_blank');

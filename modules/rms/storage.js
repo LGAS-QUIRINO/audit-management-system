@@ -8,6 +8,7 @@ import { store, newId } from '../../js/store.js';
 import { esc, pill, modal, toast, $, $$ } from '../../js/ui.js';
 import { hasRole, fmtDate, periodLabel, visibleOffices, scopesFor } from './rms.js';
 import { numberOf, saveItem, batchOf, isBatchLead, periodsText, isRepItem } from './receiving.js';
+import { isBulkRec, particularsLines } from './othersub.js';
 import { downloadTable, toExcelBook } from './export.js';
 
 const by = (refs) => refs.me?.data.email || '';
@@ -518,7 +519,7 @@ function logRows(refs, rms, teamId, f) {
 // Lists of offices or bank accounts: the count and the first three names, e.g. "8 offices: QIP (GF), … and 5 more".
 function particulars(rms, offs, i) {
   const d = describe(rms, offs, i);
-  if (!isRepItem(i)) return { office: d.office, more: d.what + (i.pages ? ' · ' + i.pages : '') };
+  if (!isRepItem(i)) return { office: d.office, more: d.what + (i.pages ? ' · ' + i.pages : '') + (i.kind === 'other' && i.attach ? ' · ' + particularsLines(i)[0].text : '') };
   const recs = i.batchId ? batchOf(rms, i) : [i], r = rms.reports.find((x) => x.id === i.reportId);
   const ents = recs.flatMap((x) => (x.checklist || []).filter((c) => c.ok || c.na));
   const perLine = !!(r && r.perOffice) || ents.some((c) => c.line);
@@ -541,6 +542,11 @@ function logTableHtml(rms, data) {
       const w = g.folder ? whereOf(rms, g.folder) : null;
       return `<tr class="grp"><td colspan="8">${g.folder ? `Folder ${esc(g.folder.code)} · ${esc(w.text)} · ${g.files.length} record${g.files.length === 1 ? '' : 's'}${g.folder.softCopy ? ' · soft copies: ' + esc(g.folder.softCopy) : ''}` : `Not yet filed · ${g.files.length} record${g.files.length === 1 ? '' : 's'}`}</td></tr>`
         + g.files.map((i) => { const p = particulars(rms, data.offs, i), soft = softOf(rms, i);
+          // A transmittal of several documents (e.g. 3 AIRs): one line per document.
+          if (isBulkRec(i) && i.docs.length) { const L = particularsLines(i), rs = L.length, sp = rs > 1 ? ` rowspan="${rs}"` : '';
+            const loc = `<td${sp}>${soft ? (/^https?:\/\//i.test(soft) ? `<a href="${esc(soft)}" target="_blank" rel="noopener">${esc(soft)}</a>` : esc(soft)) : '—'}</td><td${sp}>${g.folder ? esc(w.place ? [w.room?.name, placeName(w.place)].filter(Boolean).join(' › ') : 'not placed yet') : '—'}</td><td${sp}>${esc(i.remarks || '')}</td>`;
+            return L.map((l, k) => `<tr>${k ? '' : `<td class="ctr"${sp}>${++n}</td><td class="mono"${sp}>${esc(g.folder ? g.folder.code : '—')}</td><td${sp}>${esc(fmtDate(i.receivedAt))}</td><td class="mono"${sp}>${esc(numberOf(i))}</td>`}
+              <td>${k ? '' : esc(p.office) + ' · ' + esc(i.docTypeName || i.reportCode) + ` (${rs})<br>`}<span class="${l.miss ? 'urg' : 'muted'}">${esc(l.text)}</span></td>${k ? '' : loc}</tr>`).join(''); }
           return `<tr><td class="ctr">${++n}</td><td class="mono">${esc(g.folder ? g.folder.code : '—')}</td><td>${esc(fmtDate(i.receivedAt))}</td><td class="mono">${esc(numberOf(i))}</td>
             <td>${esc(p.office)}<br><span class="muted">${esc(p.more)}</span></td><td>${soft ? (/^https?:\/\//i.test(soft) ? `<a href="${esc(soft)}" target="_blank" rel="noopener">${esc(soft)}</a>` : esc(soft)) : '—'}</td>
             <td>${g.folder ? esc(w.place ? [w.room?.name, placeName(w.place)].filter(Boolean).join(' › ') : 'not placed yet') : '—'}</td><td>${esc(i.remarks || '')}</td></tr>`; }).join(''); }).join('')

@@ -8,6 +8,7 @@ import { hasRole, fmtDate, periodLabel, visibleOffices, scopesFor } from './rms.
 import { numberOf, statusText, isVerify, isBatchLead, batchOf, periodsText } from './receiving.js';
 import { canPsao, psaoIn, routeState } from './psao.js';
 import { downloadTable, toExcelBook } from './export.js';
+import { bulkNote } from './othersub.js';
 
 const localDay = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
 const today = () => localDay(new Date());
@@ -36,7 +37,7 @@ function allDocs(refs, rms) {
   const teamName = (id) => refs.team[id]?.data.name || '';
   const out = rms.items.filter((i) => i.trackingNo && isBatchLead(rms, i) && !i.atPsao).map((i) => {
     const kind = i.kind === 'comm' ? 'comm' : i.kind === 'other' ? 'other' : 'report';
-    const what = kind === 'comm' ? i.subject || '' : kind === 'other' ? (i.docKind || i.docTypeName || i.reportCode) + ' · ' + (i.subject || '') + (i.docNo ? ' · ' + i.docNo : '')
+    const what = kind === 'comm' ? i.subject || '' : kind === 'other' ? (i.docKind || i.docTypeName || i.reportCode) + ' · ' + (i.subject || '') + (i.docNo ? ' · ' + i.docNo : '') + (bulkNote(i) ? ' · ' + bulkNote(i) : '')
       : (i.reportCode || '') + ' · ' + (i.batchId ? periodsText(batchOf(rms, i).map((x) => x.period)) + ' (one transmittal)' : periodLabel(i.period));
     return { i, kind, team: i.teamId || offs.find((o) => o.id === i.officeId)?.teamId || '', teamName: teamName(i.teamId || offs.find((o) => o.id === i.officeId)?.teamId), from: i.fromOutside || label(i.officeId), what, status: statusText(i), verify: isVerify(i) };
   });

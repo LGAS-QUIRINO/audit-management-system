@@ -7,6 +7,7 @@ import { moduleFrame } from '../../js/frame.js';
 import { outgoingHtml, wireOutgoing, awaitingCount } from './outgoing.js';
 import { download } from './export.js';
 import { dailyHtml, wireDaily } from './daily.js';
+import { editOtherSetup, cleanType, typeSummary, numberListHtml, wireNumberList, gapTypes } from './othersub.js';
 import { foldersHtml, wireFolders, unfiledHtml, wireUnfiled, unfiledCount, locationHtml, wireLocation, storageHtml, wireStorage, locationOf, logbookHtml, wireLogbook } from './storage.js';
 import { canPsao, psaoOnly, psaoInHtml, wirePsaoIn, wireRows, fromPsaoHtml, waitingForMe, routingCount, psaoAwaiting, psaoIn } from './psao.js';
 import { receivingHtml, wireReceiving, numberOf, statusPill, isVerify, historyHtml, checklistHtml, itemsFor, isGrouped, lineTally, unpackItem, periodRecs, periodState, periodOf, isIn, saveItem, periodsText, viewItem, isRepItem } from './receiving.js';
@@ -187,6 +188,8 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
   const psao = canPsao(refs) ? [{ section: true, label: 'PSAO' },
     { key: 'psao-in', label: 'Incoming', icon: 'inbox', href: '#/rms/psao-in', count: routingCount(refs, rms) },
     { key: 'psao-out', label: 'Outgoing', icon: 'book', href: '#/rms/psao-out', count: psaoAwaiting(rms) }] : [];
+  // Other Submission types with a gap check (e.g. AIR) get a number list.
+  const numLists = gapTypes(rms).map((t) => ({ key: 'numbers', label: t.code + ' List', icon: 'book', href: '#/rms/numbers?t=' + encodeURIComponent(t.code) }));
   const storage = [{ section: true, label: 'RECORDS & STORAGE' },
     { key: 'folders', label: 'Folders', icon: 'folder', href: '#/rms/folders' },
     { key: 'unfiled', label: 'Not Yet Filed', icon: 'stack', href: '#/rms/unfiled', count: unfiledCount(refs, rms) },
@@ -197,6 +200,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
     { key: 'overview', label: 'Overview', icon: 'overview', href: '#/rms/overview' },
     { key: 'monitor', label: 'Submission Monitor', icon: 'grid', href: '#/rms/monitor', count: overdueN },
     { key: 'daily', label: 'Daily Report', icon: 'overview', href: '#/rms/daily' },
+    ...numLists,
     ...psao,
     ...storage,
     { section: true, label: 'SETUP' },
@@ -204,6 +208,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
   if (jobOrderOnly(refs)) return [
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving' },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
+    ...numLists,
     ...storage,
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true }];
   return [
@@ -213,6 +218,7 @@ function navItems(refs, overdueN, pendingN, awaitN, rms) {
     { key: 'receiving', label: 'Incoming', icon: 'inbox', href: '#/rms/receiving', count: pendingN },
     { key: 'outgoing', label: 'Outgoing', icon: 'book', href: '#/rms/outgoing', count: awaitN },
     { key: 'daily', label: 'Daily Report', icon: 'overview', href: '#/rms/daily' },
+    ...numLists,
     { key: 'borrow', label: 'Borrow Log', icon: 'swap', soon: true },
     ...psao,
     ...storage,
@@ -230,11 +236,11 @@ export async function render(ctx) {
   if (view === 'setup') view = parts[1] === 'offices' ? 'offices' : 'library';
   if (view === 'incoming') view = 'receiving';
   const STORE_VIEWS = ['folders', 'unfiled', 'location', 'storage', 'logbook'];
-  if (jo && !['receiving', 'outgoing', ...STORE_VIEWS].includes(view)) view = 'receiving';
+  if (jo && !['receiving', 'outgoing', 'numbers', ...STORE_VIEWS].includes(view)) view = 'receiving';
   if (['psao-in', 'psao-out'].includes(view) && !canPsao(refs)) view = 'overview';
   if (psaoOnly(refs) && ['receiving', 'outgoing', 'offices'].includes(view)) view = view === 'outgoing' ? 'psao-out' : view === 'offices' ? 'library' : 'psao-in';
   const overdue = jo ? [] : overdueAll(refs, rms, year);
-  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook', daily: 'Daily Report' };
+  const crumbs = { overview: 'Overview', monitor: 'Submission Monitor', library: 'Report Library', offices: 'Office Setup', receiving: 'Incoming', outgoing: 'Outgoing', 'psao-in': 'Incoming · PSAO', 'psao-out': 'Outgoing · PSAO', folders: 'Folders', unfiled: 'Not Yet Filed', location: 'Location', storage: 'Storage Setup', logbook: 'Records Logbook', daily: 'Daily Report', numbers: (gapTypes(rms).find((t) => t.code === q.get('t')) || gapTypes(rms)[0] || { code: 'Number' }).code + ' List' };
   const offIds = new Set(visibleOffices(refs, rms, scopesFor(refs).map((s) => s.id)).map((o) => o.id));
   const pendingN = (jo ? 0 : rms.items.filter((i) => isVerify(i) && offIds.has(i.officeId)).length) + waitingForMe(refs, rms).length;
   const body = view === 'receiving' ? receivingHtml(refs, rms, q).replace('id="rcv-new">+ Receive Documents</button></div>', (m) => m + fromPsaoHtml(refs, rms))
@@ -247,6 +253,7 @@ export async function render(ctx) {
     : view === 'storage' ? storageHtml(refs, rms, q)
     : view === 'logbook' ? logbookHtml(refs, rms, q)
     : view === 'daily' ? dailyHtml(refs, rms, q)
+    : view === 'numbers' ? numberListHtml(refs, rms, q)
     : view === 'monitor' ? monitorHtml(refs, rms, q)
     : view === 'library' ? libraryHtml(refs, rms, q)
     : view === 'offices' ? officesHtml(refs, rms, q)
@@ -268,6 +275,7 @@ export async function render(ctx) {
   else if (view === 'storage') wireStorage(refs, rms, q);
   else if (view === 'logbook') wireLogbook(refs, rms, q);
   else if (view === 'daily') wireDaily(refs, rms, q);
+  else if (view === 'numbers') wireNumberList(refs, rms, q);
 }
 
 /* ================= Overview ================= */
@@ -693,8 +701,9 @@ function libraryHtml(refs, rms, q) {
       ${rms.groups.length ? `<div class="note chips">${rms.groups.map((g) => pill(g.name + ' · ' + inGroup(g.id), 'blue')).join('')}</div>`
         : `<div class="note">No groups yet. The team decides its own groups (for example by what the reports contain), then assigns each report to one. Groups organize Receiving, the Submission Monitor and later the encoding.</div>`}</section>
     <section class="panel" style="margin-top:20px"><div class="panel-head"><h2>Other Submission Types · ${rms.otherTypes.length}</h2>${edit ? '<span class="r"><button class="btn" id="edit-other">Edit Types</button></span>' : ''}</div>
-      <div class="note chips" style="display:flex;flex-wrap:wrap;gap:6px">${rms.otherTypes.map((t) => pill(t.name + ' · ' + t.code + ((t.kinds || []).length ? ' · ' + t.kinds.length + ' kinds' : '') + (t.starts && t.starts[new Date().getFullYear()] ? ' · starts ' + String(t.starts[new Date().getFullYear()]).padStart(4, '0') : ''), 'blue')).join('')}</div>
-      <div class="note">Documents that are not a monitored report or a letter (MOA, ordinance, resolution…). Numbered per office, type and year, e.g. PGQ-OPAC-MOA-${new Date().getFullYear()}-0001. Not in the Submission Monitor.</div></section>
+      <div class="note chips" style="display:flex;flex-wrap:wrap;gap:6px">${rms.otherTypes.map((t) => { const txt = t.name + ' · ' + t.code + ((t.kinds || []).length ? ' · ' + t.kinds.length + ' kinds' : '') + (typeSummary(t) ? ' · ' + typeSummary(t) : '') + (t.starts && t.starts[new Date().getFullYear()] ? ' · starts ' + String(t.starts[new Date().getFullYear()]).padStart(4, '0') : '');
+        return edit ? `<button type="button" class="pill blue ot-set" data-otset="${esc(t.code)}" title="Set up the checklist, Bulk and fields">${esc(txt)} ✎</button>` : pill(txt, 'blue'); }).join('')}</div>
+      <div class="note">Documents that are not a monitored report or a letter (MOA, ordinance, resolution…). Numbered per office, type and year, e.g. PGQ-OPAC-MOA-${new Date().getFullYear()}-0001. Not in the Submission Monitor.${edit ? ' Click a type to set up its checklist of attachments, Bulk (several documents in one transmittal) and the fields recorded for each.' : ''}</div></section>
     <section class="panel" style="margin-top:20px">
       <div class="panel-head"><h2>Reports · ${list.filter((r) => r.active !== false).length}</h2>${list.length ? '<span class="r"><label class="sr-only" for="find-rep">Search reports</label><input class="input" id="find-rep" placeholder="Search reports" style="width:200px"></span>' : ''}</div>
       ${list.length ? `<div class="t-head" style="${cols}"><span>Code</span><span>Report</span><span>Schedule</span><span>Checklist</span><span>Used by</span><span></span></div>
@@ -712,6 +721,7 @@ function wireLibrary(refs, rms) {
   const add = $('#add-report'); if (add) add.onclick = () => editReport(refs, rms, null);
   const eg = $('#edit-groups'); if (eg) eg.onclick = () => editGroups(refs, rms);
   const eo = $('#edit-other'); if (eo) eo.onclick = () => editOtherTypes(refs, rms);
+  $$('[data-otset]').forEach((b) => { b.onclick = () => editOtherSetup(refs, rms, b.dataset.otset); });
   const st = $('#st-save'); if (st) st.onclick = async () => {
     await store.save('rms_settings', 'office', { startPeriod: $('#st-y').value + '-' + $('#st-m').value }, by(refs));
     toast('Monitoring start saved.', 'ok'); };
@@ -756,7 +766,7 @@ async function editOtherTypes(refs, rms) {
       if (nc && nn && !list.some((x) => x.code === nc)) list.push({ code: nc, name: nn, starts: {} });
       if (list.some((t) => !t.code || !t.name.trim())) { toast('Every type needs a code and a name.', 'bad'); return false; }
       if (new Set(list.map((t) => t.code)).size !== list.length) { toast('Two types have the same code.', 'bad'); return false; }
-      out = list.map((t) => ({ code: t.code, name: t.name.trim(), kinds: t.kinds || [], ...(Object.keys(t.starts).length ? { starts: t.starts } : {}) })); return true; } }] });
+      out = list.map((t) => cleanType({ ...t, name: t.name.trim() })); return true; } }] });
   if (res !== 'save') return;
   await store.save('rms_settings', 'othertypes', { types: out }, by(refs));
   toast('Other Submission types saved.', 'ok');
